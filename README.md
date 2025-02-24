@@ -1,5 +1,10 @@
 # Easy Cat
 
+## Installation
+```shell
+$ pip install git+https://github.com/AstroJH/easycat.git
+```
+
 ## Common Tool
 ```Python
 import easycat
