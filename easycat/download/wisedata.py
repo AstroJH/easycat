@@ -111,12 +111,11 @@ class WISEDataDownloader:
         raj2000 = param["raj2000"]
         dej2000 = param["dej2000"]
         coord = SkyCoord(raj2000, dej2000, unit="deg", frame="fk5")
-        radius = self.radius
 
         # download WISE data
         try:
-            t_allwise  = self.query_from_network(coord, radius, "allwise")
-            t_neowise  = self.query_from_network(coord, radius, "neowise")
+            t_allwise  = self.query_from_network(coord, "allwise")
+            t_neowise  = self.query_from_network(coord, "neowise")
             t_combined = combine_wisedata(t_neowise=t_neowise, t_allwise=t_allwise)
         except Exception as e:
             logging.error(f"{obj_id}: An exception occurred while querying.", exc_info=True, stack_info=True)
@@ -142,7 +141,7 @@ class WISEDataDownloader:
                         handler=self.download_item,
                         n_workers=self.n_works)
         else:
-            self.download_item(obj_id=obj_id, param={
+            return self.download_item(obj_id=obj_id, param={
                 "raj2000": raj2000,
                 "dej2000": dej2000
             })
