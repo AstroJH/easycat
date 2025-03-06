@@ -17,40 +17,62 @@ def pnpoly(polygon:list[list]|list[tuple], point:tuple|list):
         j = i
     return odd_nodes
 
-def generate_polygon(data:pd.DataFrame, attr1:str, attr2:str):
-    col1 = data[attr1]
-    col2 = data[attr2]
+def generate_polygon(data:list[pd.DataFrame]|pd.DataFrame, attr1:str, attr2:str):
+    if isinstance(data, pd.DataFrame):
+        data_lst = [data]
+    else:
+        data_lst = data
 
-    polygon_attr1 = []
-    polygon_attr2 = []
     polygon = []
 
+    lines = []
     def on_click(event):
         if event.button is MouseButton.LEFT:
             x = event.xdata
             y = event.ydata
-            polygon_attr1.append(x)
-            polygon_attr2.append(y)
+            plt.plot([x], [y], marker="*", markersize=5, color="k",  markerfacecolor="none", linestyle="none")
+            
+            if len(polygon) > 0:
+                if len(lines) > 0:
+                    l = lines.pop()
+                    l.remove()
+
+                lp = polygon[-1] # last point
+                fp = polygon[0] # first point
+                l1, = plt.plot([x, lp[0]], [y, lp[1]], color="k", linestyle="--")
+                l2, = plt.plot([x, fp[0]], [y, fp[1]], color="k", linestyle="--")
+                lines.append(l1)
+                lines.append(l2)
+
             polygon.append((x, y))
-            plt.plot([x], [y], marker="*", markersize=5, color="tab:red",  markerfacecolor="none", linestyle="none")
             plt.pause(0.25)
 
-    plt.plot(col1, col2, marker="o", markersize=5, color="tab:blue",  markerfacecolor="none", linestyle="none", alpha=0.1)
-    plt.xlabel(attr1)
-    plt.ylabel(attr2)
+    color_list = ["tab:red", "tab:blue", "green", "orange", "purple"]
+    for i, d in enumerate(data_lst):
+        col1 = d[attr1]
+        col2 = d[attr2]
+        plt.plot(col1, col2, marker="o", markersize=5, color=color_list[i],
+                 markerfacecolor="none", linestyle="none", alpha=0.1)
+        plt.xlabel(attr1)
+        plt.ylabel(attr2)
 
     plt.connect('button_press_event', on_click)
     plt.show()
     plt.close()
-    return polygon_attr1, polygon_attr2, polygon
+    return polygon
 
-def get_subsample(data:pd.DataFrame, attr1:str, attr2:str):
-    mask = np.empty(len(data), dtype=np.bool_)
-    polygon_attr1, polygon_attr2, polygon = generate_polygon(data, attr1, attr2)
+def get_subsample(datas:list[pd.DataFrame], attr1:str, attr2:str):
+    polygon = generate_polygon(datas, attr1, attr2)
     print(polygon)
-    for i in range(0, len(data)):
-        row = data.iloc[i]
-        val1 = row[attr1]
-        val2 = row[attr2]
-        mask[i] = pnpoly(polygon, (val1, val2))
-    return data[mask]
+
+    result:list[pd.DataFrame] = []
+    for data in datas:
+        mask = np.empty(len(data), dtype=np.bool_)
+        for i in range(0, len(data)):
+            row = data.iloc[i]
+            val1 = row[attr1]
+            val2 = row[attr2]
+            mask[i] = pnpoly(polygon, (val1, val2))
+        result.append(data[mask])
+
+    return result
