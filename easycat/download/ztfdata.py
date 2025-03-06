@@ -1,15 +1,10 @@
 from os import path
-from typing import Literal, Optional
+from typing import Optional
 import logging
 
 from ztfquery import lightcurve
-from astroquery.exceptions import InvalidQueryError
-import astropy.units as u
 from astropy.units import Quantity
 from astropy.coordinates import SkyCoord
-from astropy.table import Table, vstack
-from astropy.table import Table
-import astropy.units as u
 import easycat
 from pandas import DataFrame
 

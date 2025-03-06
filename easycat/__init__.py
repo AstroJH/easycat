@@ -11,8 +11,6 @@ from numpy import recarray
 from concurrent.futures import ThreadPoolExecutor, Future
 from progressbar import ProgressBar, Percentage, Bar, Timer, Counter
 
-from . import download
-
 RecordIterable = Iterable[tuple[str,bool]]
 Record = tuple[str,bool]
 
@@ -135,4 +133,6 @@ def load_logfile(logpath:str, catalog:DataFrame) -> RecordIterable:
     
     return download_record
 
-__all__ = ["start", "download"]
+from . import download
+from . import subcat2d
+__all__ = ["start", "download", "subcat2d"]
