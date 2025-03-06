@@ -5,7 +5,7 @@
 $ pip install git+https://github.com/AstroJH/easycat.git
 ```
 
-## subcat2d: Selecting subsamples within a polygonal region
+## Selecting subsamples within a polygonal region
 ```Python
 from pandas import DataFrame
 
