@@ -10,8 +10,8 @@ from astropy.coordinates import SkyCoord
 from astropy.table import Table, vstack
 from astropy.table import Table
 import astropy.units as u
-import easycat
 from pandas import DataFrame
+from . import core
 
 WISECAT_INFO = {
     "allwise": {
@@ -137,7 +137,7 @@ class WISEDataDownloader:
     
     def download(self, obj_id:Optional[str]=None, raj2000:Optional[float]=None, dej2000:Optional[float]=None):
         if obj_id is None:
-            easycat.start(logpath=self.logpath, catalog=self.catalog,
+            core.start(logpath=self.logpath, catalog=self.catalog,
                         handler=self.download_item,
                         n_workers=self.n_works)
         else:

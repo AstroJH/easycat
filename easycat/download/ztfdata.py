@@ -5,7 +5,7 @@ import logging
 from ztfquery import lightcurve
 from astropy.units import Quantity
 from astropy.coordinates import SkyCoord
-import easycat
+from . import core
 from pandas import DataFrame
 
 class ZTFLightcurveDownloader:
@@ -52,7 +52,7 @@ class ZTFLightcurveDownloader:
     
     def download(self, obj_id:Optional[str]=None, raj2000:Optional[float]=None, dej2000:Optional[float]=None):
         if obj_id is None:
-            easycat.start(logpath=self.logpath, catalog=self.catalog,
+            core.start(logpath=self.logpath, catalog=self.catalog,
                         handler=self.download_item,
                         n_workers=self.n_works)
         else:
