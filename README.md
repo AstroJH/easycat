@@ -91,3 +91,15 @@ downloader.download()
 
 > **Tip**
 > You can create the `catalog` by reading from Excel Table or other local file.
+
+## Download ZTF Lightcurve
+```Python
+downloader = ZTFLightcurveDownloader(
+    radius=3*u.arcsecond,
+    store_dir="./test_store_dir",
+    catalog=catalog,
+    logpath="./test.log.npy",
+    n_works=10)
+
+downloader.download()
+```

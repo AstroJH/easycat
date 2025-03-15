@@ -4,6 +4,7 @@ import logging
 
 from ztfquery import lightcurve
 from astropy.units import Quantity
+import astropy.units as u
 from astropy.coordinates import SkyCoord
 from . import core
 from pandas import DataFrame
@@ -21,7 +22,7 @@ class ZTFLightcurveDownloader:
         coord = coordinates.transform_to(frame="fk5")
         raj2000 = coord.ra.degree
         dej2000 = coord.dec.degree
-        lcq = lightcurve.LCQuery.from_position(raj2000, dej2000, self.radius)
+        lcq = lightcurve.LCQuery.from_position(raj2000, dej2000, self.radius.to_value(u.arcsecond))
         return lcq.data
     
     def download_item(self, obj_id:str, param:dict) -> bool:
