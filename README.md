@@ -58,6 +58,10 @@ def handler(obj_id:str, params:dict) -> bool:
 start(logpath, catalog, handler, n_workers=10)
 ```
 
+## Structure Function for AGN
+TODOing...
+
+
 ## Download WISE Data
 ### Case1: Single infrared object
 ```Python
