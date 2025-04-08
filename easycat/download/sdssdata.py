@@ -51,7 +51,7 @@ class SdssSpectrumDownloader:
 
         try:
             filepath = path.join(self.store_dir, obj_id+".fits")
-            sp.write(filepath, overwrite=True)
+            sp.writeto(filepath, overwrite=True)
         except Exception as e:
             logging.error(f"{obj_id}: store exception", exc_info=True, stack_info=True)
             return False
