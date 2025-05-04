@@ -1,13 +1,19 @@
 from os import path
+from io import StringIO
 from typing import Optional
 import logging
 
-from ztfquery import lightcurve
+# from ztfquery import lightcurve
+import requests
 from astropy.units import Quantity
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 from . import core
 from pandas import DataFrame
+import pandas as pd
+
+BASEURL = "https://irsa.ipac.caltech.edu/cgi-bin/ZTF/nph_light_curves"
+
 
 class ZTFLightcurveDownloader:
     def __init__(self, radius:Quantity, store_dir:str,
@@ -22,8 +28,18 @@ class ZTFLightcurveDownloader:
         coord = coordinates.transform_to(frame="fk5")
         raj2000 = coord.ra.degree
         dej2000 = coord.dec.degree
-        lcq = lightcurve.LCQuery.from_position(raj2000, dej2000, self.radius.to_value(u.arcsecond))
-        return lcq.data
+        radius = self.radius.to_value("deg")
+
+        url = f"{BASEURL}?POS=CIRCLE {raj2000} {dej2000} {radius}&FORMAT=CSV"
+        url = url.replace(" ", "%20")
+
+        # lcq = lightcurve.LCQuery.from_position(raj2000, dej2000, self.radius.to_value(u.arcsecond))
+        # return lcq.data
+        return pd.read_csv(
+            StringIO(
+                requests.get(url).content.decode('utf-8')
+            )
+        )
     
     def download_item(self, obj_id:str, param:dict) -> bool:
         raj2000 = param["raj2000"]
@@ -43,8 +59,8 @@ class ZTFLightcurveDownloader:
         
         # store ZTF lightcurve to local disk
         try:
-            filepath = path.join(self.store_dir, obj_id+".xlsx")
-            df_ztf.to_excel(filepath, index=False)
+            filepath = path.join(self.store_dir, obj_id+".csv")
+            df_ztf.to_csv(filepath, index=False)
         except Exception as e:
             logging.error(f"{obj_id}: store exception", exc_info=True, stack_info=True)
             return False

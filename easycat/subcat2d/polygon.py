@@ -9,7 +9,7 @@ import numpy as np
 
 def pnpoly(polygon:list[list]|list[tuple], point:tuple|list) -> bool:
     """
-    
+    `polygon` and `point` do not accept NaN!!
     """
     px = point[0]
     py = point[1]
