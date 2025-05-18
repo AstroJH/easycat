@@ -9,6 +9,33 @@ from astropy.coordinates import SkyCoord
 from . import core
 from pandas import DataFrame
 
+from os.path import join as pjoin
+from typing import Literal
+
+
+BASEURL = "https://skyserver.sdss.org/"
+
+
+def get_specurl(*, action:Literal["search", "pull"],
+                specid:str, release:str="dr18", 
+                radius:Quantity, ra, dec):
+    
+    url = pjoin(BASEURL, release)
+
+    if action == "search":
+        R = radius.to_value("arcmin")
+        url = pjoin(url, "SkyServerWS", "SpectroQuery", "ConeSpectro")
+        url = f"{url}?radius={R}&ra={ra}&dec={dec}&format=csv"
+        return url
+    
+    if action == "pull":
+        url = pjoin(url, "en", "get", "specById.ashx")
+        url = f"{url}?ID={specid}"
+        return url
+    
+    raise Exception(f"Action `{action}` is unknown.")
+
+
 class SdssSpectrumDownloader:
     def __init__(self, radius:Quantity, store_dir:str,
                  catalog:Optional[DataFrame]=None, logpath:Optional[str]=None, n_works:int=10):

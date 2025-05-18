@@ -1,0 +1,12 @@
+[package]
+name = "sayhello-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pyo3 = "0.25.0"
+
+[lib]
+name = "sayhello"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
