@@ -8,8 +8,7 @@ class LightcurveReprocessor(ABC):
         pass
     
     @abstractmethod
-    def reprocess(self, data, **kwargs):
-        pass
+    def reprocess(self, data, **kwargs): ...
 
 
 class ReprocessFactory:

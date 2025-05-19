@@ -78,5 +78,3 @@ def handle_dbscan_result(lcurve:pd.DataFrame, pos_ref:SkyCoord, result:DBSCAN):
 
     return clusters, noise
     
-
-    

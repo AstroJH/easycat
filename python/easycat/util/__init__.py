@@ -1,5 +1,8 @@
 import numpy as np
 from scipy import stats
+from . import dbscan
+
+__all__ = ["dbscan"]
 
 def grp_by_max_interval(data, max_interval=1.2):
     lo = []
@@ -19,6 +22,33 @@ def grp_by_max_interval(data, max_interval=1.2):
     hi.append(N-1)
     
     return (np.array(lo), np.array(hi))
+
+
+def calc_boundary(data, xsigma=1):
+    i_data_min = np.argmin(data)
+    i_data_max = np.argmax(data)
+
+    data_ = np.delete(data, [i_data_min, i_data_max])
+
+    mean = np.mean(data_)
+    std  = np.std(data_, ddof=1)
+
+    if std == 0: ...
+
+    delta = xsigma * std
+    return mean - delta, mean + delta
+
+
+def find_outliers(data, threshold=3):
+
+    if len(data) < 5:
+        return np.empty(0, dtype=np.intp) # 至少 5 个数据点才施行异常点检测
+    
+    lower, upper = calc_boundary(data, xsigma=threshold)
+    
+    return np.where(
+        (data < lower) | (data > upper)
+    )
 
 
 def ftest(chi1, chi2, dof1, dof2):
