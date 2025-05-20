@@ -10,4 +10,4 @@ __all__ = [
 ]
 
 for processor in [WiseReprocessor, ZtfReprocessor]:
-    ReprocessFactory.register_processor(processor)
+    ReprocessFactory.register(processor)
