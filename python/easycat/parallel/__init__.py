@@ -1,3 +1,3 @@
-from .core import dispatch
+from .core import TaskDispatcher
 
-__all__ = ["dispatch"]
+__all__ = ["TaskDispatcher"]

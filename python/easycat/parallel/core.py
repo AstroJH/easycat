@@ -1,136 +1,194 @@
-import pandas as pd
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
-from tqdm import tqdm
-import signal
+import sys
 import os
-from typing import Callable, Optional
+from os import path
+from typing import Callable, Any, Literal, Optional
 import time
+import signal
+import pickle
+from tempfile import NamedTemporaryFile
 
-class GracefulInterrupt:
-    """Graceful interrupt handler"""
+from pandas import DataFrame
 
-    def __init__(self):
-        self.interrupted = False
-        self.original_sigint = signal.getsignal(signal.SIGINT)
-        
-    def __enter__(self):
-        """Register signal handler"""
-        signal.signal(signal.SIGINT, self._handler)
-        return self
-        
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Restore original signal handler"""
-        signal.signal(signal.SIGINT, self.original_sigint)
-        
-    def _handler(self, signum, frame):
-        """Custom signal handler"""
-        if self.interrupted:
-            print("\nForceful termination prevented. Please wait for current tasks to complete...")
-            return
-            
-        self.interrupted = True
-        print("\nInterrupt request detected. Stopping processing... (Press Ctrl+\\ to force quit)")
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, Future, as_completed
+from concurrent.futures._base import Executor
+from progressbar import ProgressBar, Percentage, Bar, Timer, Counter
 
-def dispatch(
-    df: pd.DataFrame,
-    process_func: Callable,
-    mode: str = "thread",
-    max_workers: Optional[int] = None,
-    checkpoint: Optional[str] = None,
-    checkpoint_interval: int = 10
-) -> pd.DataFrame:
-    """
-    Parallel processing with graceful interruption and resume support
-    
-    Args:
-        df: Input DataFrame to process
-        process_func: Processing function that accepts (index, row) tuple
-        mode: Execution mode ("thread"/"process")
-        max_workers: Maximum concurrent workers
-        checkpoint: Path for progress checkpoint file
-        checkpoint_interval: Auto-save interval in seconds
-    """
-    
-    # Validate parameters
-    if mode not in ("thread", "process"):
-        raise ValueError("Invalid mode. Choose 'thread' or 'process'")
-        
-    # Initialize results container
-    results = {}
-    checkpoint_data = {"processed": set(), "results": {}}
-    
-    # Load existing checkpoint
-    if checkpoint and os.path.exists(checkpoint):
-        import pickle
-        with open(checkpoint, "rb") as f:
-            checkpoint_data = pickle.load(f)
-        print(f"Checkpoint file detected. Resumed {len(checkpoint_data['processed'])} records")
 
-    # Create executor
-    Executor = ThreadPoolExecutor if mode == "thread" else ProcessPoolExecutor
-    max_workers = max_workers or (os.cpu_count() or 4)
-    
-    with GracefulInterrupt() as interrupt, Executor(max_workers=max_workers) as executor:
-        # Submit tasks (skip completed)
-        futures = {}
-        for index, row in df.iterrows():
-            if index not in checkpoint_data["processed"]:
-                future = executor.submit(process_func, (index, row))
-                futures[future] = index
-                
-        # Progress bar configuration
-        total = len(futures)
+class TaskDispatcher:
+    def __init__(
+        self, catalog:DataFrame, task:Callable[[str,dict],tuple], *,
+        mode: Literal["thread", "process"]="thread",
+        n_workers:int=4,
+        checkpoint:Optional[str]=None,
+        checkpoint_interval=10,
+        rehandle_failed:bool=False,
+        exception_handler:Callable[[BaseException],Any]=(lambda e: print(e)),
+    ): 
+        if mode not in ("thread", "process"):
+            raise ValueError("Invalid mode. Choose 'thread' or 'process'")
+        
+        self.catalog = catalog
+        self.task = task
+        self.mode = mode
+        self.n_workers = n_workers
+        self.checkpoint = checkpoint
+        self.checkpoint_interval = checkpoint_interval
+        self.rehandle_failed = rehandle_failed
+        self.exception_handler = exception_handler
+
+        self.load_checkpoint()
+        self.executor:Executor = (
+            ThreadPoolExecutor if self.mode == "thread" else ProcessPoolExecutor
+        )(max_workers=self.n_workers)
+
+        if rehandle_failed:
+            self.record["failed"] = set()
+        
+
+    def dispatch(self):
+        catalog = self.catalog
+        record = self.record
+        task = self.task
+        executor = self.executor
+        checkpoint = self.checkpoint
+
         last_save = time.time()
-        desc = f"Processing ({mode}, remaining {total} items)"
+
+        signal.signal(signal.SIGINT, signal.SIG_IGN) # <========================== ignore Ctrl+C
+
+        # Submit tasks
+        # future -> idx -> row
+        futures = {}
+        for idx, row in catalog.iterrows():
+            if (idx in record["completed"]) or (idx in record["failed"]): continue
+
+            future = executor.submit(task4record, idx, task, row.to_dict())
+            futures[future] = idx
+
+        shutdown = self.shutdown_builder(futures)
+        signal.signal(signal.SIGINT, shutdown) # <================================ handle Ctrl+C
+
+        n_total = len(catalog)
+        n_count = len(record["completed"])+len(record["failed"])
         
-        with tqdm(total=total, desc=desc) as pbar:
+        pbar = init_pbar(n_total)
+        pbar.update(n_count)
+
+        for future in as_completed(futures):
+            n_count += 1
+            idx = futures[future]
             try:
-                for future in as_completed(futures):
-                    if interrupt.interrupted:
-                        break
-                        
-                    # Process result
-                    index = futures[future]
-                    try:
-                        result = future.result()
-                        results[index] = result
-                        checkpoint_data["processed"].add(index)
-                        checkpoint_data["results"][index] = result
-                    except Exception as e:
-                        print(f"\nTask {index} failed: {str(e)[:200]}")
-                        
-                    # Update progress
-                    pbar.update(1)
-                    pbar.set_description(f"Processing ({mode}, remaining {len(futures)-pbar.n} items)")
-                    
-                    # Periodic checkpoint save
-                    if checkpoint and (time.time() - last_save) > checkpoint_interval:
-                        _save_checkpoint(checkpoint, checkpoint_data)
-                        last_save = time.time()
-                        
-            except KeyboardInterrupt:
-                if not interrupt.interrupted:
-                    raise  # Handle non-signal interrupts
-                    
-        # Final checkpoint save
-        if checkpoint:
-            _save_checkpoint(checkpoint, checkpoint_data)
+                is_successful, data = future.result()
+
+                if is_successful:
+                    record["completed"].add(idx)
+                    record["results"][idx] = data
+                else:
+                    record["failed"].add(idx)
+                    record["results"][idx] = None
+
+            except Exception as e:
+                record["failed"].add(idx)
+                record["results"][idx] = None
             
-    # Merge results
-    final_results = {**checkpoint_data["results"], **results}
-    return pd.DataFrame.from_dict(final_results, orient='index').reindex(df.index)
+            pbar.update(n_count)
 
+            # Periodic checkpoint save
+            if checkpoint and (time.time() - last_save) > self.checkpoint_interval:
+                self.save_checkpoint()
+                last_save = time.time()
 
-def _save_checkpoint(path: str, data: dict):
-    """Safely save checkpoint file"""
+        # clean resources and save logfile
+        executor.shutdown(wait=True)
 
-    import pickle
-    from tempfile import NamedTemporaryFile
+        if checkpoint: self.save_checkpoint()
+
+        check_exceptions(futures, self.exception_handler)
+        return record
     
-    try:
-        with NamedTemporaryFile('wb', delete=False) as f:
-            pickle.dump(data, f)
+    def save_checkpoint(self):
+        record = self.record
+        filepath = self.checkpoint
+
+        # Safely save checkpoint file
+        with NamedTemporaryFile("wb", delete=False) as f:
+            pickle.dump(record, f)
             tempname = f.name
-        os.replace(tempname, path)
-    except Exception as e:
-        print(f"Failed to save checkpoint: {str(e)}")
+        os.replace(tempname, filepath)
+
+
+    def load_checkpoint(self) -> dict:
+        filepath = self.checkpoint
+
+        record = {
+            "completed": set(),
+            "failed": set(),
+            "results": {}
+        }
+
+        if filepath is None:
+            self.record = record
+            return
+        
+        if not path.exists(filepath):
+            print(f"Creating log file [{filepath}] ... ", end="")
+            self.record = record
+            self.save_checkpoint()
+            print("Completed.")
+            return
+        
+        if path.isfile(filepath):
+            with open(filepath, "rb") as f:
+                record = pickle.load(f)
+            
+            completed = record["completed"]
+            print(f"Checkpoint file detected. Resumed {len(completed)} records.")
+
+            self.record = record
+            return
+        
+        print(f"[WARNING] {filepath} is not a file.")
+        self.record = record
+    
+    def shutdown_builder(self, futures:list[Future]):
+        def shutdown(s, frame):
+            signal.signal(signal.SIGINT, signal.SIG_IGN) # Don't fire Ctrl+C repeatedly!
+
+            print("\nStopping the task, please be patient...")
+            self.executor.shutdown(wait=True, cancel_futures=True)
+            
+            self.save_checkpoint()
+
+            check_exceptions(futures)
+            sys.exit(0)
+        
+        return shutdown
+    
+
+
+def task4record(idx, handler:Callable[[str,dict],dict], param:dict):
+    is_successful, data = handler(idx, param)
+    return is_successful, data
+
+
+def check_exceptions(futures:list[Future], handler:Callable[[BaseException],Any]=(lambda e: print(e))):
+    for f in futures:
+        if f.cancelled():
+            continue
+
+        e = f.exception()
+        if e:
+            handler(e)
+
+
+def init_pbar(n_total):
+    widgets = [
+            Percentage(), " ",
+            Bar(), " ",
+            Timer(format="%s"), " ",
+            Counter(), f"/{n_total}"
+        ]
+    
+    pbar = ProgressBar(widgets=widgets, maxval=n_total).start()
+    return pbar
+
