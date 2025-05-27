@@ -6,7 +6,7 @@ from astropy import units as u
 from .core import LightcurveReprocessor
 from ...util import grp_by_max_interval, find_outliers, databinner, dbscan
 
-class WiseReprocessor(LightcurveReprocessor):
+class WISEReprocessor(LightcurveReprocessor):
     def __init__(self):
         super().__init__()
         self._missing_check_fields = ["mjd", "w1mag", "w2mag", "w1sigmag", "w2sigmag", "na", "nb"]
@@ -27,10 +27,12 @@ class WiseReprocessor(LightcurveReprocessor):
         max_interval = kwargs.get("max_interval", 1.2)
 
         lcurve = lcurve.sort_values(by="mjd")
+        lcurve.reset_index(drop=True, inplace=True)
+
         lcurve = self.filter_missing(lcurve)
         lcurve = self.criteria_basic(lcurve)
 
-        if pos_ref is not None:
+        if pos_ref is not None and len(lcurve) > 0:
             lcurve = dbscan.filter_dbscan(
                 lcurve,
                 pos_ref=pos_ref,
@@ -39,11 +41,12 @@ class WiseReprocessor(LightcurveReprocessor):
                 min_cluster_size=min_cluster_size
             )
 
-        lcurve = self.filter_outliers(
-            lcurve,
-            outlier_threshold=outlier_threshold,
-            max_interval=max_interval
-        )
+        if len(lcurve) > 0:
+            lcurve = self.filter_outliers(
+                lcurve,
+                outlier_threshold=outlier_threshold,
+                max_interval=max_interval
+            )
         
         return lcurve
 
@@ -116,7 +119,9 @@ class WiseReprocessor(LightcurveReprocessor):
         cond5 = lcurve["cc_flags"].apply(lambda s: s[:2]) == "00"
         cond6 = (w1rchi2 < 5) & (w2rchi2 < 5)
 
-        return lcurve[cond1 & cond2 & cond3 & cond4 & cond5 & cond6]
+        lcurve = lcurve[cond1 & cond2 & cond3 & cond4 & cond5 & cond6]
+        lcurve.reset_index(drop=True, inplace=True)
+        return lcurve
     
 
     def filter_missing(self, lcurve, missing_value=-1):
@@ -129,7 +134,10 @@ class WiseReprocessor(LightcurveReprocessor):
         for f in fields:
             mask = mask & (lcurve[f] != missing_value)
         
-        return lcurve[mask]
+        lcurve = lcurve[mask]
+        lcurve.reset_index(drop=True, inplace=True)
+
+        return lcurve
     
 
     def filter_uncertainty(self, lcurve, w1threshold, w2threshold):

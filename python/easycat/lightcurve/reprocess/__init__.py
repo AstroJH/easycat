@@ -1,13 +1,13 @@
-from .wise import WiseReprocessor
-from .ztf import ZtfReprocessor
+from .wise import WISEReprocessor
+from .ztf import ZTFReprocessor
 from .core import ReprocessFactory, LightcurveReprocessor
 
 __all__ = [
     "ReprocessFactory",
     "LightcurveReprocessor",
-    "WiseReprocessor",
-    "ZtfReprocessor"
+    "WISEReprocessor",
+    "ZTFReprocessor"
 ]
 
-for processor in [WiseReprocessor, ZtfReprocessor]:
+for processor in [WISEReprocessor, ZTFReprocessor]:
     ReprocessFactory.register(processor)

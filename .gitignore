@@ -6,3 +6,6 @@ Cargo.lock
 *.egg-info/
 *.so
 *.pyd
+examples/test.csv
+examples/wise_image.ipynb
+examples/wisedata/

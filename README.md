@@ -109,7 +109,7 @@ downloader.download()
 ```
 
 ## Reprocessing WISE Lightcurve
-<img src="./figures/demo_dbscan.png" width="20%" alt="demonstration_of_dbscan">
+<img src="./figures/demo_dbscan.png" width="50%" alt="demonstration_of_dbscan">
 
 ```Python
 sdss_pos = SkyCoord(...)

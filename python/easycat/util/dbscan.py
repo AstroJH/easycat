@@ -11,6 +11,7 @@ def filter_dbscan(lcurve:pd.DataFrame, pos_ref:SkyCoord, radius:Quantity, min_ne
 
     for c in clusters:
         if len(c) >= min_cluster_size:
+            c.reset_index(drop=True, inplace=True)
             return c
     
     return lcurve.iloc[0:0]

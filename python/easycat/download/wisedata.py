@@ -11,7 +11,7 @@ from astropy.table import Table, vstack
 from astropy.table import Table
 import astropy.units as u
 from pandas import DataFrame
-from . import core
+from ..parallel import TaskDispatcher
 
 WISECAT_INFO = {
     "allwise": {
@@ -31,7 +31,7 @@ WISECAT_INFO = {
 }
 
 
-def combine_wisedata(t_neowise:Table, t_allwise:Table):
+def combine_wisedata(t_neowise:Table, t_allwise:Table) -> Table:
     fields = [
         "raj2000", "dej2000", "mjd",
         "w1mag", "w1sigmag", "w1rchi2",
@@ -74,7 +74,7 @@ def combine_wisedata(t_neowise:Table, t_allwise:Table):
     return t_combined
 
 
-class WISEDataDownloader:
+class WiseDataDownloader:
     def __init__(self, radius:Quantity, store_dir:str,
                  catalog:Optional[DataFrame]=None, logpath:Optional[str]=None, n_works:int=10):
         self.catalog = catalog
@@ -107,7 +107,10 @@ class WISEDataDownloader:
 
         return result
 
-    def download_item(self, obj_id:str, param:dict) -> bool:
+    def download_item(self, obj_id:str, param:dict, *,
+                      return_data:bool=False,
+                      store_data:bool=True):
+        return_content = None
         raj2000 = param["raj2000"]
         dej2000 = param["dej2000"]
         coord = SkyCoord(raj2000, dej2000, unit="deg", frame="fk5")
@@ -117,31 +120,155 @@ class WISEDataDownloader:
             t_allwise  = self.query_from_network(coord, "allwise")
             t_neowise  = self.query_from_network(coord, "neowise")
             t_combined = combine_wisedata(t_neowise=t_neowise, t_allwise=t_allwise)
+            if return_data: return_content = t_combined.to_pandas()
         except Exception as e:
             logging.error(f"{obj_id}: An exception occurred while querying.", exc_info=True, stack_info=True)
-            return False
+            return False, return_content
 
         if len(t_combined) == 0: # no data
             logging.warning(f"{obj_id}: Empty data.")
-            return True
+            if return_data: return_content = t_combined.to_pandas()
+            return True, return_content
         
         # store WISE data to local disk
-        try:
-            filepath = path.join(self.store_dir, obj_id+".fits")
-            t_combined.write(filepath, overwrite=True)
-        except Exception as e:
-            logging.error(f"{obj_id}: store exception", exc_info=True, stack_info=True)
-            return False
+        if store_data:
+            try:
+                filepath = path.join(self.store_dir, obj_id+".fits")
+                t_combined.write(filepath, overwrite=True)
+            except Exception as e:
+                logging.error(f"{obj_id}: store exception", exc_info=True, stack_info=True)
+                return False, return_content
         
-        return True
+        return True, return_content
     
-    def download(self, obj_id:Optional[str]=None, raj2000:Optional[float]=None, dej2000:Optional[float]=None):
-        if obj_id is None:
-            core.start(logpath=self.logpath, catalog=self.catalog,
-                        handler=self.download_item,
-                        n_workers=self.n_works)
-        else:
-            return self.download_item(obj_id=obj_id, param={
-                "raj2000": raj2000,
-                "dej2000": dej2000
-            })
+    def download(self,
+        pos_ref:Optional[SkyCoord]=None,
+        mode:Literal["item", "catalog"]="catalog",
+        obj_id:Optional[str]=None,
+        return_data:bool=False,
+        store_data:bool=True
+    ):
+
+        def task(obj_id, param):
+            return self.download_item(obj_id, param, return_data=return_data, store_data=store_data)
+
+        if mode == "catalog":
+            record = TaskDispatcher(
+                catalog=self.catalog,
+                task=task,
+                checkpoint=self.logpath,
+                n_workers=self.n_works,
+                mode="thread",
+                rehandle_failed=True
+            ).dispatch()
+            return record
+        
+        raj2000 = pos_ref.ra.to("deg").value
+        dej2000 = pos_ref.dec.to("deg").value
+
+        return task(obj_id=obj_id, param={
+            "raj2000": raj2000,
+            "dej2000": dej2000
+        })
+
+class WISEDataArchive:
+    def __init__(self):
+        self.combined_fields = [
+            "raj2000", "dej2000", "mjd",
+            "w1mag", "w1sigmag", "w1rchi2",
+            "w2mag", "w2sigmag", "w2rchi2",
+            "na", "nb", "qi_fact", "cc_flags",
+            "qual_frame", "saa_sep", "moon_masked"
+        ]
+    
+    def download_wisetable(self, coords:SkyCoord, table:Literal["allwise", "neowise"], radius:Quantity) -> Table:
+        info = WISECAT_INFO.get(table, None)
+        if info is None: raise InvalidQueryError("Catalog name must be allwise or neowise!")
+
+        catname = info.get("catname")
+        columns = ",".join(info.get("colnames"))
+
+        result:Table = Irsa.query_region(coords, catalog=catname, columns=columns,
+                            spatial="Cone", radius=radius)
+
+        if table == "allwise":
+            if len(result) > 0: result["qual_frame"] = -1
+            else:               result.add_column(col=[], name="qual_frame")
+
+        # -------------------------------
+        for name in result.colnames:
+            if result.dtype[name] == object:
+                result[name] = result[name].astype(str)
+
+            if name == "mjd":
+                result[name].unit = u.day
+
+        return result
+
+
+    def retrieve_photo_for_item(self,
+        item_id:str,
+        coord:SkyCoord,
+        *,
+        radius:Quantity=6*u.arcsec,
+        store_dir:Optional[str]=None,
+        return_data:bool=True
+    ) -> tuple[bool, Optional[DataFrame]]:
+
+        # download WISE data
+        try:
+            t_allwise  = self.download_wisetable(coord, "allwise", radius)
+            t_neowise  = self.download_wisetable(coord, "neowise", radius)
+            t_combined = combine_wisedata(t_neowise=t_neowise, t_allwise=t_allwise)
+        except:
+            logging.error(f"{item_id}: An exception occurred while querying.")
+            return False, None
+
+
+        if len(t_combined) == 0: # no data
+            logging.warning(f"{item_id}: Empty data.")
+        
+        # store WISE data to local disk
+        if store_dir is not None:
+            try:
+                filepath = path.join(store_dir, item_id+".fits")
+                t_combined.write(filepath, overwrite=True)
+            except:
+                logging.error(f"{item_id}: store exception")
+                return False, None
+        
+        
+        return True, \
+            None if not return_data else t_combined.to_pandas()
+        
+
+    def retrieve_photo(self, *,
+        catalog:DataFrame,
+        radius:Quantity=6*u.arcsec,
+        return_data:bool=True,
+        store_dir:Optional[str]=None,
+        checkpoint:Optional[str]=None,
+        n_works:int=4
+    ):
+        
+        def task(item_id, param):
+            raj2000 = param.get("raj2000")
+            dej2000 = param.get("dej2000")
+            coord = SkyCoord(raj2000, dej2000, unit="deg", frame="fk5")
+
+            return self.retrieve_photo_for_item(
+                item_id, coord,
+                radius=radius,
+                store_dir=store_dir,
+                return_data=return_data
+            )
+
+        record = TaskDispatcher(
+            catalog=catalog,
+            task=task,
+            checkpoint=checkpoint,
+            n_workers=n_works,
+            mode="thread",
+            rehandle_failed=True
+        ).dispatch()
+        return record

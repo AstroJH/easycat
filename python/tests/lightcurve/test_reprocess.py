@@ -5,10 +5,10 @@ import unittest
 import pandas as pd
 import numpy as np
 
-from easycat.lightcurve.reprocess import ReprocessFactory, WiseReprocessor
+from easycat.lightcurve.reprocess import ReprocessFactory, WISEReprocessor
 
 class TestWiseReprocessor(unittest.TestCase):
-    def get_reprocessor(self) -> WiseReprocessor:
+    def get_reprocessor(self) -> WISEReprocessor:
         reprocessor = ReprocessFactory.get(None, {
             "telescope": "WISE"
         })
