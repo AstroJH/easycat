@@ -220,8 +220,8 @@ class WISEDataArchive:
             t_allwise  = self.download_wisetable(coord, "allwise", radius)
             t_neowise  = self.download_wisetable(coord, "neowise", radius)
             t_combined = combine_wisedata(t_neowise=t_neowise, t_allwise=t_allwise)
-        except:
-            logging.error(f"{item_id}: An exception occurred while querying.")
+        except Exception as e:
+            logging.error(f"{item_id}: An exception occurred while querying.\n{e}")
             return False, None
 
 

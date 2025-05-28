@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from typing import Literal
 
 def amplitude(lcurve, valname, errname, err_sys=0):
     vals = lcurve[valname]
@@ -14,4 +15,5 @@ def amplitude(lcurve, valname, errname, err_sys=0):
 def sigma_m(lcurve, colname):
     vals = lcurve[colname]
     mu = np.mean(vals)
+    
 
