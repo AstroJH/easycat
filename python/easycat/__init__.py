@@ -4,6 +4,7 @@ from . import lightcurve
 from . import astro_xray
 from . import parallel
 from . import sayhello
+from . import stats
 
 __all__ = [
     "download",
@@ -11,5 +12,6 @@ __all__ = [
     "lightcurve",
     "astro_xray",
     "parallel",
-    "sayhello"
+    "sayhello",
+    "stats"
 ]

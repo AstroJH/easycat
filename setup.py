@@ -11,6 +11,11 @@ setup(
     #         "easycat.sayhello.sayhello_rs",
     #         path="rust/sayhello-rs/Cargo.toml",
     #         binding=Binding.PyO3,
+    #     ),
+    #     RustExtension(
+    #         "easycat.lightcurve.sf.rust_sf",
+    #         path="rust/structure-function-rs/Cargo.toml",
+    #         binding=Binding.PyO3,
     #     )
     # ],
     install_requires=[],
