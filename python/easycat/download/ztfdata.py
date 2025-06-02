@@ -1,6 +1,6 @@
 from os import path
 from io import StringIO
-from typing import Optional
+from typing import Optional, Tuple
 import logging
 
 # from ztfquery import lightcurve
@@ -92,7 +92,7 @@ class ZTFDataArchive:
         radius:Quantity=6*u.arcsec,
         store_dir:Optional[str]=None,
         return_data:bool=True
-    ) -> tuple[bool, Optional[DataFrame]]:
+    ) -> Tuple[bool, Optional[DataFrame]]:
         coord = coord.transform_to(frame="fk5")
         raj2000 = coord.ra.degree
         dej2000 = coord.dec.degree

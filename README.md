@@ -1,4 +1,5 @@
 # Easy Cat
+A Python toolkit in my astronomical researches.
 
 ## Installation
 ```shell
@@ -59,7 +60,11 @@ start(logpath, catalog, handler, n_workers=10)
 ```
 
 ## Structure Function for AGN
-TODOing...
+```Python
+from easycat.lightcurve import sf
+
+tau, dm, err = sf.sfdata(t=mjd, val=w1mag, err=w1sigmag, z=0.3)
+```
 
 
 ## Downloading WISE Data

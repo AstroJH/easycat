@@ -1,5 +1,5 @@
 from os import path
-from typing import Literal, Optional
+from typing import Literal, Optional, Tuple
 import logging
 
 from astroquery.ipac.irsa import Irsa
@@ -213,7 +213,7 @@ class WISEDataArchive:
         radius:Quantity=6*u.arcsec,
         store_dir:Optional[str]=None,
         return_data:bool=True
-    ) -> tuple[bool, Optional[DataFrame]]:
+    ) -> Tuple[bool, Optional[DataFrame]]:
 
         # download WISE data
         try:

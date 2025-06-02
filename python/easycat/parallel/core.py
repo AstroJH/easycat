@@ -11,6 +11,7 @@ from pandas import DataFrame
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, Future, as_completed
 from concurrent.futures._base import Executor
 from progressbar import ProgressBar, Percentage, Bar, Timer, Counter
+from typing import List
 
 class Record:
     def __init__(self):
@@ -184,7 +185,7 @@ class TaskDispatcher:
         print(f"[WARNING] {filepath} is not a file.")
         self.record = record
     
-    def shutdown_builder(self, futures:list[Future]):
+    def shutdown_builder(self, futures:List[Future]):
         def shutdown(s, frame):
             signal.signal(signal.SIGINT, signal.SIG_IGN) # Don't fire Ctrl+C repeatedly!
 
@@ -220,7 +221,7 @@ def task4record(idx, handler:Callable[[str,dict],dict], param:dict):
     return is_successful, data
 
 
-def check_exceptions(futures:list[Future], handler:Callable[[BaseException],Any]=(lambda e: print(e))):
+def check_exceptions(futures:List[Future], handler:Callable[[BaseException],Any]=(lambda e: print(e))):
     for f in futures:
         if f.cancelled():
             continue

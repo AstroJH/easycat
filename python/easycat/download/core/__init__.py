@@ -1,6 +1,6 @@
 import sys
 from os import path
-from typing import Callable, Any, Iterable
+from typing import Callable, Any, Iterable, List, Tuple
 import time
 import signal
 
@@ -11,8 +11,8 @@ from numpy import recarray
 from concurrent.futures import ThreadPoolExecutor, Future
 from progressbar import ProgressBar, Percentage, Bar, Timer, Counter
 
-RecordIterable = Iterable[tuple[str,bool]]
-Record = tuple[str,bool]
+RecordIterable = Iterable[Tuple[str,bool]]
+Record = Tuple[str,bool]
 
 def start(logpath:str, catalog:DataFrame,
           handler:Callable[[str,dict],bool],
@@ -25,7 +25,7 @@ def start(logpath:str, catalog:DataFrame,
 
     signal.signal(signal.SIGINT, signal.SIG_IGN) # <========================== ignore Ctrl+C
 
-    futures:list[Future] = []
+    futures:List[Future] = []
     for record in download_records:
         obj_id, is_completed = record
         if is_completed: continue
@@ -87,7 +87,7 @@ def show_progress_bar(download_records:RecordIterable):
         time.sleep(5)
 
 
-def check_exceptions(futures:list[Future], handler:Callable[[BaseException],Any]=(lambda e: print(e))):
+def check_exceptions(futures:List[Future], handler:Callable[[BaseException],Any]=(lambda e: print(e))):
     for f in futures:
         if f.cancelled():
             continue
@@ -99,7 +99,7 @@ def check_exceptions(futures:list[Future], handler:Callable[[BaseException],Any]
 
 def shutdown_builder(td_pool:ThreadPoolExecutor,
                      logpath:str, download_record,
-                     futures:list[Future]):
+                     futures:List[Future]):
     def shutdown(s, frame):
         signal.signal(signal.SIGINT, signal.SIG_IGN) # Don't fire Ctrl+C repeatedly!
 
@@ -119,7 +119,7 @@ def shutdown_builder(td_pool:ThreadPoolExecutor,
 def load_logfile(logpath:str, catalog:DataFrame) -> RecordIterable:
     if not path.isfile(logpath):
         print("Creating log file... ", end="")
-        obj_ids:list[str] = list(catalog.index)
+        obj_ids:List[str] = List(catalog.index)
 
         download_record = recarray((len(obj_ids),), dtype=[("obj_id", "<U32"), ("is_completed", "u1")])
         for i in range(0, len(obj_ids)):

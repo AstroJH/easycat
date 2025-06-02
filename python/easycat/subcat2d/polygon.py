@@ -6,8 +6,9 @@ import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 import numpy as np
+from typing import List, Tuple
 
-def pnpoly(polygon:list[list]|list[tuple], point:tuple|list) -> bool:
+def pnpoly(polygon:List[Tuple], point:Tuple) -> bool:
     """
     `polygon` and `point` do not accept NaN!!
     """
@@ -24,9 +25,9 @@ def pnpoly(polygon:list[list]|list[tuple], point:tuple|list) -> bool:
         j = i
     return odd_nodes
 
-def get_subsample(datas:list[pd.DataFrame], attr1:str, attr2:str,
-                  polygon:list[list]|list[tuple]):
-    result:list[pd.DataFrame] = []
+def get_subsample(datas:List[pd.DataFrame], attr1:str, attr2:str,
+                  polygon:List[Tuple]):
+    result:List[pd.DataFrame] = []
     for data in datas:
         mask = np.empty(len(data), dtype=np.bool_)
         for i in range(0, len(data)):
@@ -41,9 +42,9 @@ def get_subsample(datas:list[pd.DataFrame], attr1:str, attr2:str,
 
 COLOR_LST = ["tab:red", "tab:blue", "green", "orange", "purple"]
 class PolygonGuiSelector():
-    def __init__(self, data:list[DataFrame]|DataFrame, attr1:str, attr2:str):
-        self._data:list[DataFrame] = [data] if isinstance(data, pd.DataFrame) else data
-        self._polygon:list[tuple] = []
+    def __init__(self, data:List[DataFrame], attr1:str, attr2:str):
+        self._data:List[DataFrame] = [data] if isinstance(data, pd.DataFrame) else data
+        self._polygon:List[Tuple] = []
         self._artist_lines:list[Line2D] = []
 
         self.attr1 = attr1
