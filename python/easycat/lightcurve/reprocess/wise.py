@@ -258,7 +258,7 @@ class WISEReprocessor(LightcurveReprocessor):
         return lcurve
     
 
-    def clean_epoch(self, lcurve:DataFrame, max_interval=1.2):
+    def clean_epoch(self, lcurve:DataFrame, n_least=5, max_interval=1.2):
         mjd = lcurve["mjd"].to_numpy()
         los, his = grp_by_max_interval(mjd, max_interval=max_interval)
         
@@ -266,12 +266,14 @@ class WISEReprocessor(LightcurveReprocessor):
         # n_epoch = 0
 
         for lo, hi in zip(los, his):
-            if hi - lo + 1 < 5:
+            if hi - lo + 1 < n_least:
                 mask[lo:hi+1] = False
             # else:
             #     n_epoch += 1
         
-        return lcurve[mask]
+        lcurve = lcurve[mask]
+        lcurve.reset_index(drop=True, inplace=True)
+        return lcurve
 
 
     def generate_longterm_lcurve(self, lcurve:DataFrame, max_interval=1.2, method="mean"):

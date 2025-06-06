@@ -44,10 +44,12 @@ def plot_wiselc(lcurve:pd.DataFrame):
     ax_mag = fig.add_subplot(gs[0])
     ax_color = fig.add_subplot(gs[1])
     ax_color.sharex(ax_mag)
-    ax_mag.set_xticks([])
+    ax_mag.xaxis.set_visible(False)
+
 
     mjd_start = lcurve.mjd[0]
-    rmjd = lcurve.mjd - mjd_start
+    rmjd = (lcurve.mjd - mjd_start)/365
+    ax_color.set_xlabel(f"$\\rm \\frac{{MJD-{mjd_start:.2f}}}{{365}}$ [yr]")
 
     param_errorbar = {
         "linestyle": "none",
