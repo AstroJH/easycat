@@ -1,0 +1,15 @@
+[package]
+name = "sf-rs"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "sf_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+ndarray = "0.16.1"
+rayon = "1.8"
+pyo3 = { version = "0.25.0", features = ["extension-module", "anyhow"] }
+numpy = "0.25.0"
+

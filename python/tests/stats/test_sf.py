@@ -6,8 +6,7 @@ import pandas as pd
 import numpy as np
 import time
 
-from easycat.lightcurve import sf
-from easycat.lightcurve.sf import rust_sf
+from easycat.stats import sf
 
 def generate_lightcurve(n_points, time_scale=100.0, amplitude=1.0, noise_level=0.1):
     t = np.sort(np.random.uniform(0, time_scale, n_points))
