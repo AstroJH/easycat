@@ -1,10 +1,95 @@
 import numpy as np
 import pandas as pd
+from pandas import DataFrame
+from typing import Literal
 
 from astropy import units as u
+from astropy.units import Quantity
+from astropy import constants as const
+from scipy.optimize import fsolve
+from astropy.cosmology import FlatLambdaCDM
 
 from .core import LightcurveReprocessor
 from ...util import grp_by_max_interval, find_outliers, databinner, dbscan
+
+cosmo = FlatLambdaCDM(H0=70, Om0=0.3)
+lambda_w1 = 3.4*u.um
+lambda_w2 = 4.6*u.um
+nu_w1 = (const.c/lambda_w1).to(u.GHz)
+nu_w2 = (const.c/lambda_w2).to(u.GHz)
+
+
+def get_flux_zero(band:Literal["W1", "W2"]) -> Quantity:
+    if band == "W1":
+        f0 = 306.681 * u.Jy
+    elif band == "W2":
+        f0 = 170.663 * u.Jy
+    else:
+        raise Exception(f"Error band: {band}")
+    
+    return f0
+
+
+def mag2flux(mag:float, band:Literal["W1", "W2"]) -> Quantity:
+    f0 = get_flux_zero(band)
+    flux = f0 / (10**(0.4*mag))
+    return flux.to(u.Jy)
+
+
+def flux2mag(flux:Quantity, band:Literal["W1", "W2"]) -> float:
+    f0 = get_flux_zero(band)
+    mag = 2.5 * np.log10(f0/flux)
+    return mag.to_value()
+
+
+def planck(nu:Quantity, T:Quantity) -> Quantity:
+    h = const.h
+    c = const.c
+    k_B = const.k_B
+
+    A = 2*h*nu**3/c**2
+
+    B = np.exp(h*nu/k_B/T) - 1
+
+    return (A/B).to(u.Jy)
+
+
+def flux_obs(nu_obs:Quantity, scale:float, T:Quantity, z:float) -> Quantity:
+    nu_emit = nu_obs * (1+z)
+    dL = cosmo.luminosity_distance(z)
+
+    flux = (1+z) * (scale*u.cm*u.cm) * planck(nu_emit, T) / (4*np.pi*dL*dL)
+    return flux.to(u.Jy)
+
+
+def get_bb_equation(w1flux:Quantity, w2flux:Quantity, z:float):
+    w1flux_val = w1flux.to_value(u.Jy)
+    w2flux_val = w2flux.to_value(u.Jy)
+
+    def equation(T:float):
+        T_unit = T * u.K
+        return w1flux_val*planck((1+z)*nu_w2, T_unit).to_value(u.Jy) - \
+            w2flux_val*planck((1+z)*nu_w1, T_unit).to_value(u.Jy)
+    return equation
+
+
+def solve_bbody(w1flux:Quantity, w2flux:Quantity, z:float, T0:Quantity=1.5e3*u.K):
+    # w1flux:float = w1flux.to_value(u.Jy)
+    # w2flux:float = w2flux.to_value(u.Jy)
+
+    # def equation(T):
+    #     T_unit = T * u.K
+    #     return w1flux*planck((1+z)*nu_w2, T_unit) - \
+    #         w2flux*planck((1+z)*nu_w1, T_unit)
+    
+    equation = get_bb_equation(w1flux, w2flux, z)
+    
+    temperature = fsolve(equation, T0.to_value(u.K), maxfev=1000)[0]
+    dL = cosmo.luminosity_distance(z)
+    scale = w1flux * 4*np.pi*dL*dL / (1+z) / planck((1+z)*nu_w1, temperature*u.K)
+
+    return scale.to_value(u.cm*u.cm), temperature
+
 
 class WISEReprocessor(LightcurveReprocessor):
     def __init__(self):
@@ -16,7 +101,7 @@ class WISEReprocessor(LightcurveReprocessor):
         return metadata.get("telescope") == "WISE"
     
 
-    def reprocess(self, lcurve:pd.DataFrame, **kwargs):
+    def reprocess(self, lcurve:DataFrame, **kwargs):
 
         pos_ref = kwargs.get("pos_ref", None)
         dbscan_radius = kwargs.get("dbscan_radius", 0.5*u.arcsec)
@@ -50,7 +135,7 @@ class WISEReprocessor(LightcurveReprocessor):
         
         return lcurve
 
-    def criteria_basic(self, lcurve):
+    def criteria_basic(self, lcurve:DataFrame):
         """
         Parameters
         ----------
@@ -122,9 +207,9 @@ class WISEReprocessor(LightcurveReprocessor):
         lcurve = lcurve[cond1 & cond2 & cond3 & cond4 & cond5 & cond6]
         lcurve.reset_index(drop=True, inplace=True)
         return lcurve
-    
 
-    def filter_missing(self, lcurve, missing_value=-1):
+
+    def filter_missing(self, lcurve:DataFrame, missing_value=-1):
         """ Filters missing values for specified fields (missing values are represented by -1 by default). """
 
         fields = self._missing_check_fields
@@ -140,7 +225,7 @@ class WISEReprocessor(LightcurveReprocessor):
         return lcurve
     
 
-    def filter_uncertainty(self, lcurve, w1threshold, w2threshold):
+    def filter_uncertainty(self, lcurve:DataFrame, w1threshold, w2threshold):
         w1sigmag = lcurve["w1sigmag"]
         w2sigmag = lcurve["w2sigmag"]
 
@@ -149,7 +234,7 @@ class WISEReprocessor(LightcurveReprocessor):
         return lcurve[mask]
 
 
-    def filter_outliers(self, lcurve:pd.DataFrame,
+    def filter_outliers(self, lcurve:DataFrame,
         outlier_threshold=5, max_interval=1.2):
 
         mjd = lcurve["mjd"].to_numpy()
@@ -173,7 +258,7 @@ class WISEReprocessor(LightcurveReprocessor):
         return lcurve
     
 
-    def clean_epoch(self, lcurve, max_interval=1.2):
+    def clean_epoch(self, lcurve:DataFrame, max_interval=1.2):
         mjd = lcurve["mjd"].to_numpy()
         los, his = grp_by_max_interval(mjd, max_interval=max_interval)
         
@@ -189,8 +274,7 @@ class WISEReprocessor(LightcurveReprocessor):
         return lcurve[mask]
 
 
-
-    def generate_longterm_lcurve(self, lcurve, max_interval=1.2, method="mean"):
+    def generate_longterm_lcurve(self, lcurve:DataFrame, max_interval=1.2, method="mean"):
         mjd = lcurve["mjd"].to_numpy()
         w1mag = lcurve["w1mag"].to_numpy()
         w2mag = lcurve["w2mag"].to_numpy()
@@ -214,3 +298,111 @@ class WISEReprocessor(LightcurveReprocessor):
         ], dtype=np.float64)
 
         return longterm_lcurve
+    
+    def get_quiescent_part(self, lcurve:DataFrame, *,
+        initdiff=0.2, diff_mu=0.1, diff_s=1.635):
+        w1qstate = self._get_quiescent_mask(lcurve, "w1mag", initdiff=initdiff, diff_mu=diff_mu, diff_s=diff_s)
+        w2qstate = self._get_quiescent_mask(lcurve, "w2mag", initdiff=initdiff, diff_mu=diff_mu, diff_s=diff_s)
+
+        qstate = w1qstate & w2qstate
+
+        return lcurve[qstate]
+
+    def _get_quiescent_mask(self, lcurve:DataFrame, valname:str, *,
+        initdiff=0.2, diff_mu=0.1, diff_s=1.635):
+
+        vals = lcurve[valname]
+        length = len(vals)
+
+        qstate = np.full(length, fill_value=False, dtype=np.bool)
+
+        # initial quiescent state
+        qval = np.max(vals)
+        mask = np.abs(vals - qval) < initdiff
+        qstate[mask] = True
+
+        # iterative algorithm
+        flag = (np.sum(qstate) != length)
+
+        while flag:
+            qvals = vals[qstate]
+            mu = np.mean(qvals)
+            s = np.std(qvals)
+
+            diff = np.abs(vals - mu)
+            mask = (~qstate) & (diff<diff_mu) & (diff<diff_s*s)
+
+            qstate[mask] = True
+
+            # New points append into quiescent state
+            # , and qstate isn't full
+            # => let's continue!
+            flag = (np.sum(mask)!=0) & (np.sum(qstate)!=length)
+        
+        return qstate
+    
+
+    def get_bbody_params(self, lcurve:DataFrame, redshift:float=0.):
+        results = []
+
+        for _, row in lcurve.iterrows():
+            w1mag = row["w1mag"]
+            w2mag = row["w2mag"]
+
+            w1flux = mag2flux(w1mag, "W1")
+            w2flux = mag2flux(w2mag, "W2")
+
+            res = solve_bbody(w1flux, w2flux, z=redshift)
+            results.append(res)
+        return results
+
+    def kcorrect(self, lcurve:DataFrame, redshift:float=0.):
+        dL = cosmo.luminosity_distance(redshift)
+        area = 4*np.pi*dL*dL
+
+        w1qstate = self._get_quiescent_mask(lcurve, "w1mag")
+        w2qstate = self._get_quiescent_mask(lcurve, "w2mag")
+
+        qstate = w1qstate & w2qstate
+        qlcurve = lcurve[qstate] # quiescent state
+        # hlcurve = lcurve[~qstate] # high state
+
+        qw1mag = np.mean(qlcurve["w1mag"])
+        qw2mag = np.mean(qlcurve["w2mag"])
+
+        qw1flux = mag2flux(qw1mag, "W1")
+        qw2flux = mag2flux(qw2mag, "W2")
+
+        qscale, qtemp = solve_bbody(qw1flux, qw2flux, z=redshift)
+        qA = qscale*u.cm*u.cm
+
+        w1mag_kcorr = np.empty(len(lcurve), dtype=np.float64)
+        w2mag_kcorr = np.empty(len(lcurve), dtype=np.float64)
+
+        for isq, (i, row) in zip(qstate, lcurve.iterrows()):
+            w1flux = mag2flux(row["w1mag"], "W1")
+            w2flux = mag2flux(row["w2mag"], "W2")
+
+            # try to calculate BBody equation
+            scale, T = solve_bbody(w1flux, w2flux, redshift)
+            equation = get_bb_equation(w1flux, w2flux, redshift)
+
+            if isq or (np.abs(equation(T)) < 0.01):
+                A = scale*u.cm*u.cm
+                w1flux_rest = A * planck(nu_w1, T*u.K) / area
+                w2flux_rest = A * planck(nu_w2, T*u.K) / area
+            else:
+                scale, T = solve_bbody(w1flux-qw1flux, w2flux-qw2flux, redshift)
+                A = scale*u.cm*u.cm
+                
+                equation = get_bb_equation(w1flux-qw1flux, w2flux-qw2flux, redshift)
+                if np.abs(equation(T)) < 0.01:
+                    w1flux_rest = (A * planck(nu_w1, T*u.K) + qA * planck(nu_w1, qtemp*u.K)) / area
+                    w2flux_rest = (A * planck(nu_w2, T*u.K) + qA * planck(nu_w2, qtemp*u.K)) / area
+                else:
+                    w1flux_rest = np.nan*u.Jy
+                    w2flux_rest = np.nan*u.Jy
+            w1mag_kcorr[i] = flux2mag(w1flux_rest, "W1")
+            w2mag_kcorr[i] = flux2mag(w2flux_rest, "W2")
+
+        return w1mag_kcorr, w2mag_kcorr
