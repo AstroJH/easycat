@@ -1,5 +1,4 @@
 from os import path
-from typing import Optional
 import logging
 
 from astroquery.sdss import SDSS
@@ -10,7 +9,16 @@ from . import core
 from pandas import DataFrame
 
 from os.path import join as pjoin
-from typing import Literal
+
+from io import StringIO
+from typing import Optional, Tuple, Literal
+from warnings import deprecated
+
+import requests
+from astropy.table import Table
+from . import core
+from ..parallel import TaskDispatcher
+import pandas as pd
 
 
 BASEURL = "https://skyserver.sdss.org/"
@@ -95,3 +103,65 @@ class SdssSpectrumDownloader:
                 "raj2000": raj2000,
                 "dej2000": dej2000
             })
+
+
+class SDSSDataArchive:
+    def retrieve_photo_for_item(self,
+        item_id:str,
+        coord:SkyCoord,
+        *,
+        radius:Quantity=3*u.arcsec
+    ) -> Tuple[bool, Optional[DataFrame]]:
+        
+        base_url = "http://skyserver.sdss.org/dr16/SkyServerWS/SearchTools/SqlSearch"
+
+        def cmd(ra, dec, radius):
+            sql = f"SELECT p.ObjID,p.ra,p.dec,p.u,p.g,p.r,p.i,p.z FROM photoObj p JOIN dbo.fGetNearbyObjEq({ra},{dec},{radius}) n ON n.objID=p.objID"
+            sql = sql.replace(" ", "%20")
+            return sql
+
+
+        try:
+            coord = coord.transform_to(frame="fk5")
+            ra = coord.ra.degree
+            dec = coord.dec.degree
+            radius = radius.to_value("arcmin")
+
+            url = f"{base_url}?cmd={cmd(ra, dec, radius)}&format=csv"
+            content = "\n".join(requests.get(url).content.decode('utf-8').splitlines()[1:])
+            data = pd.read_csv(StringIO(content))
+        except:
+            logging.error(f"{item_id}: An exception occurred while querying.")
+            return False, None
+
+
+        return True, data
+        
+
+    def retrieve_photo(self, *,
+        catalog:DataFrame,
+        radius:Quantity=3*u.arcsec,
+        checkpoint:Optional[str]=None,
+        n_works:int=4
+    ):
+        
+        def task(item_id, param):
+            raj2000 = param.get("raj2000")
+            dej2000 = param.get("dej2000")
+            coord = SkyCoord(raj2000, dej2000, unit="deg", frame="fk5")
+
+            return self.retrieve_photo_for_item(
+                item_id, coord,
+                radius=radius
+            )
+
+        record = TaskDispatcher(
+            catalog=catalog,
+            task=task,
+            checkpoint=checkpoint,
+            n_workers=n_works,
+            mode="thread",
+            rehandle_failed=True
+        ).dispatch()
+        return record
+    

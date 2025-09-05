@@ -73,3 +73,14 @@ def databinner(data, sigmas, method="mean", skipnan=False):
 
     # \sigma = \sqrt{\sum{{\sigma_i}^2}}/n
     return np.mean(data), np.sqrt(np.sum(np.square(sigmas)))/len(sigmas)
+
+
+def fit_histogram1d(bin_lo, bin_hi, data, model):
+    """ Fit 1-D histogram data.
+    
+    """
+    M = []
+
+    for lo, hi in zip(bin_lo, bin_hi):
+        
+        ...

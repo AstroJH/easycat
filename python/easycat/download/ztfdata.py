@@ -1,7 +1,8 @@
 from os import path
 from io import StringIO
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Literal
 import logging
+from warnings import deprecated
 
 # from ztfquery import lightcurve
 import requests
@@ -16,7 +17,7 @@ import pandas as pd
 
 BASEURL = "https://irsa.ipac.caltech.edu/cgi-bin/ZTF/nph_light_curves"
 
-
+@deprecated("Use ZTFDataArchive instead")
 class ZTFLightcurveDownloader:
     def __init__(self, radius:Quantity, store_dir:str,
                  catalog:Optional[DataFrame]=None, logpath:Optional[str]=None, n_works:int=10):
@@ -82,13 +83,11 @@ class ZTFLightcurveDownloader:
 
 
 class ZTFDataArchive:
-    def __init__(self): ...
-
-
     def retrieve_lcurve_for_item(self,
         item_id:str,
         coord:SkyCoord,
         *,
+        band:str="g,i,r",
         radius:Quantity=6*u.arcsec,
         store_dir:Optional[str]=None,
         return_data:bool=True
@@ -98,16 +97,24 @@ class ZTFDataArchive:
         dej2000 = coord.dec.degree
         radius = radius.to_value("deg")
 
-        url = f"{BASEURL}?POS=CIRCLE {raj2000} {dej2000} {radius}&FORMAT=CSV"
+        url = f"{BASEURL}?POS=CIRCLE {raj2000} {dej2000} {radius}&BANDNAME={band}&FORMAT=CSV"
         url = url.replace(" ", "%20")
 
         try:
+            resp = requests.get(url)
+            if resp.status_code != 200: raise Exception()
+
             lcurve = pd.read_csv(
                 StringIO(
-                    requests.get(url).content.decode('utf-8')
+                    resp.content.decode('utf-8')
                 )
             )
-        except:
+
+            lcurve.rename(columns={
+                "ra": "raj2000",
+                "dec": "dej2000"
+            }, inplace=True)
+        except Exception as e:
             logging.error(f"{item_id}: An exception occurred while querying.")
             return False, None
 
@@ -126,6 +133,7 @@ class ZTFDataArchive:
 
     def retrieve_lcurve(self, *,
         catalog:DataFrame,
+        band:str="g,i,r",
         radius:Quantity=6*u.arcsec,
         return_data:bool=True,
         store_dir:Optional[str]=None,
@@ -140,6 +148,7 @@ class ZTFDataArchive:
 
             return self.retrieve_lcurve_for_item(
                 item_id, coord,
+                band=band,
                 radius=radius,
                 store_dir=store_dir,
                 return_data=return_data

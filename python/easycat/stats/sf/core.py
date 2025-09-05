@@ -1,12 +1,28 @@
 import numpy as np
+import pandas as pd
 from typing import List
+import os
+from astropy.io import fits
+from astropy.table import Table
+
+def sfmodel(t, A, beta, tau):
+    return A*np.sqrt(1-np.exp(-(t/tau)**beta))
+
+def brokenpl(t, gamma1, gamma2, A, t_b):
+    conds = t < t_b
+    res = [A*(_t/365)**gamma1 if c else A*(t_b/365)**(gamma1-gamma2) * (_t/365)**gamma2 for (_t, c) in zip(t, conds)]
+    return np.array(res)
+
+def powerlaw(t, gamma, A):
+    return A*(t/365)**gamma
 
 def sfdata(t, val, err, z:float=0.):
     len_ts = len(t)
 
     if len_ts < 2:
-        tmp = lambda _: [np.float64(x) for x in range(0)]
-        return tmp(), tmp(), tmp()
+        # tmp = lambda a: [np.float64(x) for x in range(0)]
+        # return tmp(None), tmp(None), tmp(None)
+        return np.array([], dtype=np.float64), np.array([], dtype=np.float64), np.array([], dtype=np.float64)
 
     len_tau = int(len_ts*(len_ts-1)/2)
 
@@ -26,7 +42,20 @@ def sfdata(t, val, err, z:float=0.):
     return tau/(1+z), delta, sigma
 
 
-def esfdata(t_list, val_list, err_list, redshifts:List|float=0.):
+def esfdata(lcurves:List[pd.DataFrame], redshifts, time_name, val_name, err_name):
+    t_list = []
+    val_list = []
+    err_list = []
+
+    for lc in lcurves:
+        t_list.append(lc[time_name])
+        val_list.append(lc[val_name])
+        err_list.append(lc[err_name])
+    
+    return _esfdata(t_list, val_list, err_list, redshifts)
+
+
+def _esfdata(t_list, val_list, err_list, redshifts:List|float=0.):
     if isinstance(redshifts, float):
         redshifts = np.full(len(t_list), redshifts)
 
@@ -54,8 +83,17 @@ def esfdata(t_list, val_list, err_list, redshifts:List|float=0.):
     return tau, delta, sigma
 
 
+def sfmtd_default(tau, delta, sigma):
+    if len(tau) == 0:
+        return np.nan, np.nan, np.nan
+    
+    sftau = np.median(tau)
+    sf = np.sqrt(np.pi/2 * np.mean(np.abs(delta))**2 - np.mean(sigma*sigma))
+    return sftau, sf, np.nan
+
+
 def calc_sf(
-    tau, delta, sigma, bin_lo, bin_hi, sfmtd
+    tau, delta, sigma, bin_lo, bin_hi, sfmtd=sfmtd_default
 ):
     len_sf = len(bin_lo)
     res_tau = np.empty(len_sf)

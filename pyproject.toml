@@ -1,3 +1,3 @@
 [build-system]
-requires = ["setuptools", "setuptools-rust"]
+requires = ["setuptools"]
 build-backend = "setuptools.build_meta"

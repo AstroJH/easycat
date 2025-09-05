@@ -1,6 +1,7 @@
 from os import path
 from typing import Literal, Optional, Tuple
 import logging
+from warnings import deprecated
 
 from astroquery.ipac.irsa import Irsa
 from astroquery.exceptions import InvalidQueryError
@@ -74,6 +75,7 @@ def combine_wisedata(t_neowise:Table, t_allwise:Table) -> Table:
     return t_combined
 
 
+@deprecated("Use WISEDataArchive instead")
 class WiseDataDownloader:
     def __init__(self, radius:Quantity, store_dir:str,
                  catalog:Optional[DataFrame]=None, logpath:Optional[str]=None, n_works:int=10):

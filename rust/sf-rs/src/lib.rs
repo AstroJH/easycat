@@ -1,9 +1,16 @@
+use std::env;
+use std::path::{PathBuf};
+use csv::Reader;
+use serde::Deserialize;
+use polars;
+
 use std::iter::zip;
 use ndarray::prelude::*;
 use rayon::prelude::*;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[derive(Debug, Deserialize)]
 pub struct Lightcurve {
     t: Array1<f64>,
     val: Array1<f64>,
@@ -145,6 +152,10 @@ pub fn esfdata_parallel(lcurves: Vec<Lightcurve>) -> (Array1<f64>, Array1<f64>, 
     (tau, delta, sigma)
 }
 
+
+pub fn calc_esf_task() {
+
+}
 
 
 #[cfg(test)]
