@@ -68,11 +68,16 @@ def databinner(data, sigmas, method="mean", skipnan=False):
         return np.nan, np.nan
         # raise ValueError("Empty data.", 0)
     
-    if len(data) != len(sigmas):
-        raise Exception("len(data) and len(sigmas) must be same.")
+    if sigmas is None:
+        return np.mean(data), 0.0
+    else:
+        if len(data) != len(sigmas):
+            raise Exception("len(data) and len(sigmas) must be same.")
 
-    # \sigma = \sqrt{\sum{{\sigma_i}^2}}/n
-    return np.mean(data), np.sqrt(np.sum(np.square(sigmas)))/len(sigmas)
+        # \sigma = \sqrt{\sum{{\sigma_i}^2}}/n
+        mean_err = np.sqrt(np.sum(np.square(sigmas)))/len(sigmas)
+        # var = np.var(data)
+        return np.mean(data), mean_err
 
 
 def fit_histogram1d(bin_lo, bin_hi, data, model):

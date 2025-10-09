@@ -21,9 +21,11 @@ nu_w2 = (const.c/lambda_w2).to(u.GHz)
 
 def get_flux_zero(band:Literal["W1", "W2"]) -> Quantity:
     if band == "W1":
-        f0 = 306.681 * u.Jy
+        # f0 = 306.681 * u.Jy
+        f0 = 309.540 * u.Jy
     elif band == "W2":
-        f0 = 170.663 * u.Jy
+        # f0 = 170.663 * u.Jy
+        f0 = 171.787 * u.Jy
     else:
         raise Exception(f"Error band: {band}")
     
@@ -289,9 +291,35 @@ class WISEReprocessor(LightcurveReprocessor):
             lo, hi = param
             hi += 1
             bin_mjd = np.median(mjd[lo:hi])
-            bin_w1mag, bin_w1err = databinner(data=w1mag[lo:hi], sigmas=w1err[lo:hi], method=method)
-            bin_w2mag, bin_w2err = databinner(data=w2mag[lo:hi], sigmas=w2err[lo:hi], method=method)
 
+            subw1mag = w1mag[lo:hi]
+            subw2mag = w2mag[lo:hi]
+            subw1err = w1err[lo:hi]
+            subw2err = w2err[lo:hi]
+
+            subw1flux = mag2flux(subw1mag, "W1").value
+            subw2flux = mag2flux(subw2mag, "W2").value
+
+            bin_w1flux, _ = databinner(subw1flux, None, method=method)
+            bin_w2flux, _ = databinner(subw2flux, None, method=method)
+            
+            bin_w1mag = flux2mag(bin_w1flux*u.Jy, "W1")
+            bin_w2mag = flux2mag(bin_w2flux*u.Jy, "W2")
+
+            N = len(subw1mag)
+            bin_w1err = np.sqrt(
+                np.var(subw1mag) +
+                np.sum(subw1err*subw1err)/N/N +
+                0.016*0.016/N
+            )/np.sqrt(N)
+
+            N = len(subw2mag)
+            bin_w2err = np.sqrt(
+                np.var(subw2mag) +
+                np.sum(subw2err*subw2err)/N/N +
+                0.016*0.016/N
+            )/np.sqrt(N)
+            
             return bin_mjd, bin_w1mag, bin_w1err, bin_w2mag, bin_w2err
 
         bin_lis = list(map(bindata, zip(los, his)))

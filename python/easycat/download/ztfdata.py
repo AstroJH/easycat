@@ -115,7 +115,7 @@ class ZTFDataArchive:
                 "dec": "dej2000"
             }, inplace=True)
         except Exception as e:
-            logging.error(f"{item_id}: An exception occurred while querying.")
+            logging.error(f"{item_id}: An exception occurred while querying. {resp.status_code}")
             return False, None
 
         # store ZTF lightcurve to local disk

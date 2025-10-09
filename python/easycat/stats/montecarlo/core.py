@@ -61,6 +61,3 @@ def spearmanr_mc(x, y, xerr, yerr,
         zscore[i] = z
     
     return rho, zscore
-
-
-__all__ = ["spearmanr_mc"]

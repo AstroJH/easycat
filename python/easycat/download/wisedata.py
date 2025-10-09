@@ -1,5 +1,5 @@
 from os import path
-from typing import Literal, Optional, Tuple
+from typing import Literal, Optional, Tuple, Callable, Any
 import logging
 from warnings import deprecated
 
@@ -250,7 +250,8 @@ class WISEDataArchive:
         return_data:bool=True,
         store_dir:Optional[str]=None,
         checkpoint:Optional[str]=None,
-        n_works:int=4
+        n_works:int=4,
+        exception_handler:Callable[[BaseException],Any]=(lambda e: print(e))
     ):
         
         def task(item_id, param):
@@ -271,6 +272,7 @@ class WISEDataArchive:
             checkpoint=checkpoint,
             n_workers=n_works,
             mode="thread",
-            rehandle_failed=True
+            rehandle_failed=True,
+            exception_handler=exception_handler
         ).dispatch()
         return record
