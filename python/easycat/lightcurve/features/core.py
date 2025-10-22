@@ -1,15 +1,13 @@
 import numpy as np
-import pandas as pd
-from typing import Literal
-from collections import defaultdict
+# import pandas as pd
+# from typing import Literal
+# from collections import defaultdict
 
-from celerite import GP
-from celerite import terms
 from scipy.optimize import minimize
 
-from scipy import stats
-from statsmodels.tsa.stattools import acf
-from statsmodels.stats.diagnostic import acorr_ljungbox
+# from scipy import stats
+# from statsmodels.tsa.stattools import acf
+# from statsmodels.stats.diagnostic import acorr_ljungbox
 from scipy.special import gammainc
 
 FRAC_PI_2 = np.pi/2
@@ -107,6 +105,9 @@ def sigma_m(lcurve, valname, errname, err_sys=0., redshift=0.):
 
 def fit_damped_random_walk(times, values, errors, 
     log_a=np.log(0.1), log_c=np.log(1/100.0), log_sigma=np.log(0.01)):
+
+    from celerite import GP
+    from celerite import terms
 
     kernel = terms.RealTerm(log_a=log_a, log_c=log_c) + terms.JitterTerm(log_sigma=log_sigma)
     gp = GP(kernel, mean=np.mean(values))

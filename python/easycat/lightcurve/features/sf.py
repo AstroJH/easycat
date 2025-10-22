@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from multiprocessing.pool import Pool
 
 def sfdata(t, val, err, z: float=0.):
     len_ts = len(t)
@@ -42,7 +43,8 @@ def sfmtd_default(tau, delta, sigma, n_least: int=5):
 def calc_sf(
     tau, delta, sigma,
     bin_lo, bin_hi,
-    sfmtd=sfmtd_default
+    sfmtd=sfmtd_default,
+    n_least: int=5
 ):
     """
     Compute the structure function (SF) of an individual target.
@@ -61,29 +63,66 @@ def calc_sf(
         _delta = delta[mask]
         _sigma = sigma[mask]
 
-        result = sfmtd(_tau, _delta, _sigma)
+        result = sfmtd(_tau, _delta, _sigma, n_least)
 
         res_tau[i], res_sf[i], res_sigma[i] = result
     
     mask = res_tau >= 0
     return res_tau[mask], res_sf[mask], res_sigma[mask]
 
+def _task_calc_esf(
+    file, z,
+    tau_lo, tau_hi,
+    timename, valuename, errname,
+    each_lc_n_least
+):
+    lc = pd.read_csv(file)
+    tau, delta, sigma = sfdata(lc[timename], lc[valuename], lc[errname], z)
+    dt, sf, sferr = calc_sf(tau, delta, sigma, tau_lo, tau_hi, n_least=each_lc_n_least)
+    return dt, sf, sferr
+
 def calc_esf(
     files, redshifts,
     tau_lo, tau_hi,
-    timename, valuename, errname
+    timename, valuename, errname,
+    each_lc_n_least: int=5,
+    n_lc_least: int=100
 ):
     dt_s = np.array([])
     sf_s = np.array([])
     sferr_s = np.array([])
 
+
+    task_args = []
     for file, z in zip(files, redshifts):
-        lc = pd.read_csv(file)
-        tau, delta, sigma = sfdata(lc[timename], lc[valuename], lc[errname], z)
-        dt, sf, sferr = calc_sf(tau, delta, sigma, tau_lo, tau_hi)
-        dt_s = np.concatenate([dt_s, dt])
-        sf_s = np.concatenate([sf_s, sf])
-        sferr_s = np.concatenate([sferr_s, sferr])
+        # lc = pd.read_csv(file)
+        # tau, delta, sigma = sfdata(lc[timename], lc[valuename], lc[errname], z)
+        # dt, sf, sferr = calc_sf(tau, delta, sigma, tau_lo, tau_hi, n_least=each_lc_n_least)
+        # dt_s.append(dt)
+        # sf_s.append(sf)
+        # sferr_s.append(sferr)
+        task_args.append((
+            file, z, tau_lo, tau_hi, timename, valuename, errname, each_lc_n_least
+        ))
+
+    
+    
+    with Pool() as pool:
+        result = pool.starmap_async(_task_calc_esf, task_args)
+        result = result.get()
+
+    dt_s = []
+    sf_s = []
+    sferr_s = []
+
+    for dt, sf, sferr in result:
+        dt_s.append(dt)
+        sf_s.append(sf)
+        sferr_s.append(sferr)
+
+    dt_s = np.concatenate(dt_s)
+    sf_s = np.concatenate(sf_s)
+    sferr_s = np.concatenate(sferr_s)
     
     tau = []
     sf = []
@@ -91,7 +130,7 @@ def calc_esf(
     num = []
     for lo, hi in zip(tau_lo, tau_hi):
         mask = (dt_s >= lo) & (dt_s <= hi)
-        if np.sum(mask) == 0:
+        if np.sum(mask) < n_lc_least:
             continue
 
         _dt = dt_s[mask]

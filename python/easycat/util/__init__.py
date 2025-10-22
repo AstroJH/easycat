@@ -1,5 +1,8 @@
 import numpy as np
 from . import dbscan
+from typing import Literal
+from astropy import units as u
+from astropy.units import Quantity
 
 __all__ = ["dbscan", "grp_by_max_interval"]
 
@@ -89,3 +92,30 @@ def fit_histogram1d(bin_lo, bin_hi, data, model):
     for lo, hi in zip(bin_lo, bin_hi):
         
         ...
+
+
+def get_flux_zero(band: Literal["W1", "W2", "AB"]) -> Quantity:
+    if band == "W1":
+        # f0 = 306.681 * u.Jy
+        f0 = 309.540 * u.Jy
+    elif band == "W2":
+        # f0 = 170.663 * u.Jy
+        f0 = 171.787 * u.Jy
+    elif band == "AB":
+        f0 = 3631 * u.Jy
+    else:
+        raise Exception(f"Error band: {band}")
+    
+    return f0
+
+
+def mag2flux(mag: float, band: Literal["W1", "W2"]) -> Quantity:
+    f0 = get_flux_zero(band)
+    flux = f0 / (10**(0.4*mag))
+    return flux.to(u.Jy)
+
+
+def flux2mag(flux: Quantity, band: Literal["W1", "W2"]) -> float:
+    f0 = get_flux_zero(band)
+    mag = 2.5 * np.log10(f0/flux)
+    return mag.to_value()

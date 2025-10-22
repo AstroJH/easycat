@@ -3,6 +3,7 @@ import pandas as pd
 from pandas import DataFrame
 from typing import Literal
 
+from astropy.coordinates import SkyCoord
 from astropy import units as u
 from astropy.units import Quantity
 from astropy import constants as const
@@ -11,37 +12,13 @@ from astropy.cosmology import FlatLambdaCDM
 
 from .core import LightcurveReprocessor
 from ...util import grp_by_max_interval, find_outliers, databinner, dbscan
+from ...util import mag2flux, flux2mag
 
 cosmo = FlatLambdaCDM(H0=70, Om0=0.3)
 lambda_w1 = 3.4*u.um
 lambda_w2 = 4.6*u.um
 nu_w1 = (const.c/lambda_w1).to(u.GHz)
 nu_w2 = (const.c/lambda_w2).to(u.GHz)
-
-
-def get_flux_zero(band:Literal["W1", "W2"]) -> Quantity:
-    if band == "W1":
-        # f0 = 306.681 * u.Jy
-        f0 = 309.540 * u.Jy
-    elif band == "W2":
-        # f0 = 170.663 * u.Jy
-        f0 = 171.787 * u.Jy
-    else:
-        raise Exception(f"Error band: {band}")
-    
-    return f0
-
-
-def mag2flux(mag:float, band:Literal["W1", "W2"]) -> Quantity:
-    f0 = get_flux_zero(band)
-    flux = f0 / (10**(0.4*mag))
-    return flux.to(u.Jy)
-
-
-def flux2mag(flux:Quantity, band:Literal["W1", "W2"]) -> float:
-    f0 = get_flux_zero(band)
-    mag = 2.5 * np.log10(f0/flux)
-    return mag.to_value()
 
 
 def planck(nu:Quantity, T:Quantity) -> Quantity:
@@ -103,9 +80,41 @@ class WISEReprocessor(LightcurveReprocessor):
         return metadata.get("telescope") == "WISE"
     
 
-    def reprocess(self, lcurve:DataFrame, **kwargs):
+    def reprocess(self, lcurve: DataFrame, **kwargs):
+        """ A default pipeline used to reprocess WISE light curve.
+        1. sort values by mjd
+        2. filter missing value
+        3. basic criteria (calling `criteria_basic` method)
+        4. execute DBSCAN (need `pos_ref` at least)
+        5. cone cut (need `pos_ref` at least)
+        6. filter outliers (e.g., cosmic ray)
 
+        Parameters
+        ----------
+        pos_ref: SkyCoord
+
+        cone_radius: Quantity
+
+        dbscan: bool
+
+        dbscan_radius: Quantity
+
+        min_neighbors: int
+
+        min_cluster_size: int
+
+        outlier_threshold: float
+
+        max_interval: float
+
+        max_nb: int
+
+        max_rchi2: float
+        """
         pos_ref = kwargs.get("pos_ref", None)
+        cone_radius = kwargs.get("cone_radius", 6*u.arcsec)
+
+        dbscan = kwargs.get("dbscan", False)
         dbscan_radius = kwargs.get("dbscan_radius", 0.5*u.arcsec)
         min_neighbors = kwargs.get("min_neighbors", 5)
         min_cluster_size = kwargs.get("min_cluster_size", 1)
@@ -117,9 +126,9 @@ class WISEReprocessor(LightcurveReprocessor):
         lcurve.reset_index(drop=True, inplace=True)
 
         lcurve = self.filter_missing(lcurve)
-        lcurve = self.criteria_basic(lcurve)
+        lcurve = self.criteria_basic(lcurve, **kwargs)
 
-        if pos_ref is not None and len(lcurve) > 0:
+        if (pos_ref is not None) and dbscan and (len(lcurve) > 0):
             lcurve = dbscan.filter_dbscan(
                 lcurve,
                 pos_ref=pos_ref,
@@ -127,6 +136,12 @@ class WISEReprocessor(LightcurveReprocessor):
                 min_neighbors=min_neighbors,
                 min_cluster_size=min_cluster_size
             )
+        
+        if (pos_ref is not None) and (len(lcurve) > 0):
+            coords = SkyCoord(lcurve["raj2000"], lcurve["dej2000"], frame="fk5", unit="deg")
+            sep = coords.separation(pos_ref)
+            mask = sep <= cone_radius
+            lcurve = lcurve[mask]
 
         if len(lcurve) > 0:
             lcurve = self.filter_outliers(
@@ -137,7 +152,7 @@ class WISEReprocessor(LightcurveReprocessor):
         
         return lcurve
 
-    def criteria_basic(self, lcurve:DataFrame):
+    def criteria_basic(self, lcurve: DataFrame, **kwargs):
         """
         Parameters
         ----------
@@ -167,8 +182,8 @@ class WISEReprocessor(LightcurveReprocessor):
             
         Measurement Stability
             na == 0 AND nb <= 2
-            - Ensures no anomalous W1 measurements (na=0)
-            - Limits W2 anomalies to ≤2 detections (nb≤2)
+            - Ensures no anomalous WISE measurements (na = 0)
+            - Limits W2 anomalies to <=2 detections (nb <= 2)
             
         Spacecraft Position
             saa_sep > 0
@@ -189,7 +204,7 @@ class WISEReprocessor(LightcurveReprocessor):
         References
         ----------
         """
-
+        
         na = lcurve["na"]
         nb = lcurve["nb"]
         saa_sep = lcurve["saa_sep"]
@@ -199,19 +214,22 @@ class WISEReprocessor(LightcurveReprocessor):
         w1rchi2 = lcurve["w1rchi2"]
         w2rchi2 = lcurve["w2rchi2"]
 
+        max_nb = kwargs.get("max_nb", 2)
+        max_rchi2 = kwargs.get("max_rchi2", 5)
+
         cond1 = ((qual_frame > 0) | (qual_frame == -1)) & (qi_fact == 1)
-        cond2 = (na == 0) & (nb <= 2)
+        cond2 = (na == 0) & (nb <= max_nb)
         cond3 = (saa_sep > 0)
         cond4 = lcurve["moon_masked"].apply(lambda s: s[:2]) == "00"
         cond5 = lcurve["cc_flags"].apply(lambda s: s[:2]) == "00"
-        cond6 = (w1rchi2 < 5) & (w2rchi2 < 5)
+        cond6 = (w1rchi2 < max_rchi2) & (w2rchi2 < max_rchi2)
 
         lcurve = lcurve[cond1 & cond2 & cond3 & cond4 & cond5 & cond6]
         lcurve.reset_index(drop=True, inplace=True)
         return lcurve
 
 
-    def filter_missing(self, lcurve:DataFrame, missing_value=-1):
+    def filter_missing(self, lcurve: DataFrame, missing_value=-1):
         """ Filters missing values for specified fields (missing values are represented by -1 by default). """
 
         fields = self._missing_check_fields
@@ -227,7 +245,7 @@ class WISEReprocessor(LightcurveReprocessor):
         return lcurve
     
 
-    def filter_uncertainty(self, lcurve:DataFrame, w1threshold, w2threshold):
+    def filter_uncertainty(self, lcurve: DataFrame, w1threshold, w2threshold):
         w1sigmag = lcurve["w1sigmag"]
         w2sigmag = lcurve["w2sigmag"]
 
@@ -236,7 +254,7 @@ class WISEReprocessor(LightcurveReprocessor):
         return lcurve[mask]
 
 
-    def filter_outliers(self, lcurve:DataFrame,
+    def filter_outliers(self, lcurve: DataFrame,
         outlier_threshold=5, max_interval=1.2):
 
         mjd = lcurve["mjd"].to_numpy()
@@ -260,7 +278,7 @@ class WISEReprocessor(LightcurveReprocessor):
         return lcurve
     
 
-    def clean_epoch(self, lcurve:DataFrame, n_least=5, max_interval=1.2):
+    def clean_epoch(self, lcurve: DataFrame, n_least=5, max_interval=1.2):
         mjd = lcurve["mjd"].to_numpy()
         los, his = grp_by_max_interval(mjd, max_interval=max_interval)
         
@@ -278,7 +296,7 @@ class WISEReprocessor(LightcurveReprocessor):
         return lcurve
 
 
-    def generate_longterm_lcurve(self, lcurve:DataFrame, max_interval=1.2, method="mean"):
+    def generate_longterm_lcurve(self, lcurve: DataFrame, max_interval=1.2, method="mean"):
         mjd = lcurve["mjd"].to_numpy()
         w1mag = lcurve["w1mag"].to_numpy()
         w2mag = lcurve["w2mag"].to_numpy()
@@ -329,7 +347,7 @@ class WISEReprocessor(LightcurveReprocessor):
 
         return longterm_lcurve
     
-    def get_quiescent_part(self, lcurve:DataFrame, *,
+    def get_quiescent_part(self, lcurve: DataFrame, *,
         initdiff=0.2, diff_mu=0.1, diff_s=1.635):
         w1qstate = self._get_quiescent_mask(lcurve, "w1mag", initdiff=initdiff, diff_mu=diff_mu, diff_s=diff_s)
         w2qstate = self._get_quiescent_mask(lcurve, "w2mag", initdiff=initdiff, diff_mu=diff_mu, diff_s=diff_s)
@@ -338,7 +356,7 @@ class WISEReprocessor(LightcurveReprocessor):
 
         return lcurve[qstate]
 
-    def _get_quiescent_mask(self, lcurve:DataFrame, valname:str, *,
+    def _get_quiescent_mask(self, lcurve: DataFrame, valname:str, *,
         initdiff=0.2, diff_mu=0.1, diff_s=1.635):
 
         vals = lcurve[valname]
@@ -372,7 +390,7 @@ class WISEReprocessor(LightcurveReprocessor):
         return qstate
     
 
-    def get_bbody_params(self, lcurve:DataFrame, redshift:float=0.):
+    def get_bbody_params(self, lcurve: DataFrame, redshift: float=0.):
         results = []
 
         for _, row in lcurve.iterrows():
@@ -386,7 +404,7 @@ class WISEReprocessor(LightcurveReprocessor):
             results.append(res)
         return results
 
-    def kcorrect(self, lcurve:DataFrame, redshift:float=0.):
+    def kcorrect(self, lcurve: DataFrame, redshift: float=0.):
         dL = cosmo.luminosity_distance(redshift)
         area = 4*np.pi*dL*dL
 
