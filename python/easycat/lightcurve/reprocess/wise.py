@@ -12,7 +12,7 @@ from astropy.cosmology import FlatLambdaCDM
 
 from .core import LightcurveReprocessor
 from ...util import grp_by_max_interval, find_outliers, databinner, dbscan
-from ...util import mag2flux, flux2mag
+from ...astrotools import mag2flux, flux2mag
 
 cosmo = FlatLambdaCDM(H0=70, Om0=0.3)
 lambda_w1 = 3.4*u.um

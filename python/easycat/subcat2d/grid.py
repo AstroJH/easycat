@@ -7,10 +7,10 @@ import matplotlib.colors as mcolors
 import numpy as np
 import matplotlib as mpl
 from pandas import DataFrame
-from typing import Callable
+from typing import Callable, List
 
 class GridGuiSelector():
-    def __init__(self, data:DataFrame, attr1:str, attr2:str):
+    def __init__(self, data: DataFrame, attr1: str, attr2: str):
         self.state = 0
         self.data = data
         self.attr1 = attr1
@@ -40,7 +40,7 @@ class GridGuiSelector():
         fig.canvas.mpl_connect("pick_event", self._on_pick)
         fig.canvas.mpl_connect("button_press_event", self._on_click)
 
-    def _on_click(self, event:MouseEvent):
+    def _on_click(self, event: MouseEvent):
         ax = self.ax
         if   event.inaxes is self.axbtn1: self.state = 1
         elif event.inaxes is self.axbtn2: self.state = 2
@@ -67,7 +67,7 @@ class GridGuiSelector():
             artist.set_color("red")
             event.canvas.draw()
     
-    def calc(self, mapper:Callable[[DataFrame],float]):
+    def calc(self, mapper: Callable[[DataFrame], float]):
         self.xps.sort()
         self.yps.sort(reverse=True)
 
@@ -113,3 +113,69 @@ class GridGuiSelector():
         for val, rect in zip(vals,rects):
             p3, width, height = rect
             ax.add_patch(Rectangle(p3, width, height, edgecolor="k", facecolor=mappable.to_rgba(val)))
+
+
+def regular_grid_map(
+    data: DataFrame,
+    attr1: str,
+    attr2: str,
+    edge1: List,
+    edge2: List,
+    mapper: Callable[[DataFrame], float],
+    *,
+    need_rects: bool = False
+):
+    col1 = data[attr1]
+    col2 = data[attr2]
+
+    lo_edge1 = edge1[:-1]
+    hi_edge1 = edge1[1:]
+    lo_edge2 = edge2[:-1]
+    hi_edge2 = edge2[1:]
+
+    X1 = []
+    X2 = []
+    Y = []
+    num = []
+
+    for lo1, hi1 in zip(lo_edge1, hi_edge1):
+        for lo2, hi2 in zip(lo_edge2, hi_edge2):
+            mask = (col1 > lo1) & (col1 <= hi1) & (col2 > lo2) & (col2 <= hi2)
+            subdata = data[mask]
+            subcol1 = col1[mask]
+            subcol2 = col2[mask]
+
+            if len(subdata) <= 0:
+                X1.append(np.nan)
+                X2.append(np.nan)
+                Y.append(np.nan)
+                num.append(0)
+            else:
+                Y.append(mapper(subdata))
+                X1.append(np.median(subcol1))
+                X2.append(np.median(subcol2))
+                num.append(len(subdata))
+    
+    result = {
+        "X1": np.array(X1),
+        "X2": np.array(X2),
+        "Y": np.array(Y),
+        "num": np.array(num)
+    }
+
+    if not need_rects:
+        return result
+    
+    rects_attr = []
+    for lo1, hi1 in zip(lo_edge1, hi_edge1):
+        for lo2, hi2 in zip(lo_edge2, hi_edge2):
+            width1 = hi1 - lo1
+            width2 = hi2 - lo2
+
+            rects_attr.append((lo1, lo2, width1, width2))
+    
+    result.update({
+        "rects": np.array(rects_attr)
+    })
+    
+    return result
