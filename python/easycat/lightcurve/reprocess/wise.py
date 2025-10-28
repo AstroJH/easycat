@@ -20,6 +20,9 @@ lambda_w2 = 4.6*u.um
 nu_w1 = (const.c/lambda_w1).to(u.GHz)
 nu_w2 = (const.c/lambda_w2).to(u.GHz)
 
+f0_w1 = 309.540 * u.Jy
+f0_w2 = 171.787 * u.Jy
+
 
 def planck(nu:Quantity, T:Quantity) -> Quantity:
     h = const.h
@@ -315,14 +318,14 @@ class WISEReprocessor(LightcurveReprocessor):
             subw1err = w1err[lo:hi]
             subw2err = w2err[lo:hi]
 
-            subw1flux = mag2flux(subw1mag, "W1").value
-            subw2flux = mag2flux(subw2mag, "W2").value
+            subw1flux = mag2flux(subw1mag, f0_w1).value
+            subw2flux = mag2flux(subw2mag, f0_w2).value
 
             bin_w1flux, _ = databinner(subw1flux, None, method=method)
             bin_w2flux, _ = databinner(subw2flux, None, method=method)
             
-            bin_w1mag = flux2mag(bin_w1flux*u.Jy, "W1")
-            bin_w2mag = flux2mag(bin_w2flux*u.Jy, "W2")
+            bin_w1mag = flux2mag(bin_w1flux*u.Jy, f0_w1)
+            bin_w2mag = flux2mag(bin_w2flux*u.Jy, f0_w2)
 
             N = len(subw1mag)
             bin_w1err = np.sqrt(
@@ -397,8 +400,8 @@ class WISEReprocessor(LightcurveReprocessor):
             w1mag = row["w1mag"]
             w2mag = row["w2mag"]
 
-            w1flux = mag2flux(w1mag, "W1")
-            w2flux = mag2flux(w2mag, "W2")
+            w1flux = mag2flux(w1mag, f0_w1)
+            w2flux = mag2flux(w2mag, f0_w2)
 
             res = solve_bbody(w1flux, w2flux, z=redshift)
             results.append(res)
@@ -418,8 +421,8 @@ class WISEReprocessor(LightcurveReprocessor):
         qw1mag = np.mean(qlcurve["w1mag"])
         qw2mag = np.mean(qlcurve["w2mag"])
 
-        qw1flux = mag2flux(qw1mag, "W1")
-        qw2flux = mag2flux(qw2mag, "W2")
+        qw1flux = mag2flux(qw1mag, f0_w1)
+        qw2flux = mag2flux(qw2mag, f0_w2)
 
         qscale, qtemp = solve_bbody(qw1flux, qw2flux, z=redshift)
         qA = qscale*u.cm*u.cm
@@ -428,8 +431,8 @@ class WISEReprocessor(LightcurveReprocessor):
         w2mag_kcorr = np.empty(len(lcurve), dtype=np.float64)
 
         for isq, (i, row) in zip(qstate, lcurve.iterrows()):
-            w1flux = mag2flux(row["w1mag"], "W1")
-            w2flux = mag2flux(row["w2mag"], "W2")
+            w1flux = mag2flux(row["w1mag"], f0_w1)
+            w2flux = mag2flux(row["w2mag"], f0_w2)
 
             # try to calculate BBody equation
             scale, T = solve_bbody(w1flux, w2flux, redshift)
@@ -450,7 +453,7 @@ class WISEReprocessor(LightcurveReprocessor):
                 else:
                     w1flux_rest = np.nan*u.Jy
                     w2flux_rest = np.nan*u.Jy
-            w1mag_kcorr[i] = flux2mag(w1flux_rest, "W1")
-            w2mag_kcorr[i] = flux2mag(w2flux_rest, "W2")
+            w1mag_kcorr[i] = flux2mag(w1flux_rest, f0_w1)
+            w2mag_kcorr[i] = flux2mag(w2flux_rest, f0_w2)
 
         return w1mag_kcorr, w2mag_kcorr

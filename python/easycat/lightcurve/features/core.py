@@ -25,9 +25,12 @@ def peak_to_peak_amplitude(values, errors):
 
     epsilon_square = np.mean(errors*errors)
 
-    return np.sqrt(
-        delta * delta - 2 * epsilon_square
-    )
+    PP = delta * delta - 2 * epsilon_square
+
+    if PP < 0:
+        return 0.
+    else:
+        return np.sqrt(PP)
 
 
 def gross_variation(values, errors=None):
@@ -54,7 +57,7 @@ def intrinsic_variability_amplitude(values, errors, is_weighted=True):
 
     sigma_m_square = var_square - epsilon_square
 
-    sigma_m = 0 if sigma_m_square <= 0 else np.sqrt(sigma_m_square)
+    sigma_m = 0. if sigma_m_square <= 0 else np.sqrt(sigma_m_square)
 
     return sigma_m
 
@@ -65,7 +68,11 @@ def fractional_variability_amplitude(values, errors):
     epsilon_square = np.mean(errors*errors)
 
     F_square = (S_square - epsilon_square)/np.mean(values*values)
-    return np.sqrt(F_square)
+
+    if F_square < 0:
+        return 0.
+    else:
+        return np.sqrt(F_square)
 
 
 def laughlin1996(values, errors, chi2_empirical=None):

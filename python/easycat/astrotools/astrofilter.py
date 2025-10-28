@@ -10,15 +10,18 @@ from os.path import join as pjoin
 import os
 from scipy.interpolate import interp1d
 
-from astropy import constants as const
+from io import StringIO
+import pandas as pd
 
-def flux2mag(flux: Quantity, f0: Quantity) -> float:
-    mag = 2.5 * np.log10(f0/flux)
-    return mag.to_value()
+from .core import flux2mag
 
 URL_SVO2 = "http://svo2.cab.inta-csic.es"
 URL_SVO2_FPS = pjoin(URL_SVO2, "theory", "fps", "fps.php")
 URL_SVO2_VEGA = pjoin(URL_SVO2, "theory", "fps", "morefiles", "vega.dat")
+URL_SVO2_SUN = pjoin(URL_SVO2, "theory", "fps", "morefiles", "sun.dat")
+
+def calc_pivot_wavelength():
+    ...
 
 class AstroFilter:
     def __init__(
@@ -48,7 +51,6 @@ class AstroFilter:
         self.flux_zero = flux_zero
         self.wavelength_eff = wavelength_eff
 
-    # def transmission(self):
     def get_transmission_data(self):
         return self.resp
     
@@ -58,9 +60,31 @@ class AstroFilter:
 
         return interp1d(wlen, resp, kind=kind)
     
-    # @staticmethod
-    # def get_vega_spectrum():
-    #     pass
+    @staticmethod
+    def get_vega_spectrum():
+        return AstroFilter.get_spectrum_from_svo(URL_SVO2_VEGA)
+    
+    @staticmethod
+    def get_sun_spectrum():
+        return AstroFilter.get_spectrum_from_svo(URL_SVO2_SUN)
+    
+    @staticmethod
+    def get_spectrum_from_svo(url):
+        resp = requests.get(url)
+        if resp.status_code != 200: raise Exception()
+
+        spec = pd.read_csv(
+            StringIO(resp.content.decode('utf-8')),
+            delimiter="\\s+",
+            header=0,
+            names=["wavelength", "flux"]
+        )
+
+        wlen = spec["wavelength"].to_numpy() * u.AA
+        flux = spec["flux"].to_numpy() * u.erg / u.cm / u.cm / u.s / u.AA
+
+        return wlen, flux
+
 
     @staticmethod
     def download_from_svo2(svo2_filterID: str):
