@@ -1,7 +1,7 @@
 from os import path
 from typing import Literal, Optional, Tuple, Callable, Any
 import logging
-from warnings import deprecated
+# from warnings import deprecated
 
 from astroquery.ipac.irsa import Irsa
 from astroquery.exceptions import InvalidQueryError
@@ -41,22 +41,26 @@ def combine_wisedata(t_neowise:Table, t_allwise:Table) -> Table:
         "qual_frame", "saa_sep", "moon_masked"
     ]
 
-    t_allwise.rename_columns(["ra", "dec", "mjd",
-                            "w1mpro_ep", "w1sigmpro_ep", "w1rchi2_ep",
-                            "w2mpro_ep", "w2sigmpro_ep", "w2rchi2_ep",
-                            "na", "nb", "qi_fact", "cc_flags",
-                            "qual_frame", "saa_sep", "moon_masked"], fields)
-    
     t_neowise.rename_columns(["ra", "dec", "mjd",
                             "w1mpro", "w1sigmpro", "w1rchi2",
                             "w2mpro", "w2sigmpro", "w2rchi2",
                             "na", "nb", "qi_fact", "cc_flags",
                             "qual_frame", "saa_sep", "moon_masked"], fields)
-
-    t_allwise.keep_columns(fields)
     t_neowise.keep_columns(fields)
+    
+    if t_allwise is not None:
+        t_allwise.rename_columns(["ra", "dec", "mjd",
+                                "w1mpro_ep", "w1sigmpro_ep", "w1rchi2_ep",
+                                "w2mpro_ep", "w2sigmpro_ep", "w2rchi2_ep",
+                                "na", "nb", "qi_fact", "cc_flags",
+                                "qual_frame", "saa_sep", "moon_masked"], fields)
+    
 
-    t_combined:Table = vstack([t_allwise, t_neowise], metadata_conflicts="silent")
+        t_allwise.keep_columns(fields)
+
+        t_combined:Table = vstack([t_allwise, t_neowise], metadata_conflicts="silent")
+    else:
+        t_combined:Table = vstack([t_neowise], metadata_conflicts="silent")
 
     # the normal values for the following fields should be >= 0,
     # so we use -1 to fill masked/abnormal value
@@ -75,7 +79,7 @@ def combine_wisedata(t_neowise:Table, t_allwise:Table) -> Table:
     return t_combined
 
 
-@deprecated("Use WISEDataArchive instead")
+# @deprecated("Use WISEDataArchive instead")
 class WiseDataDownloader:
     def __init__(self, radius:Quantity, store_dir:str,
                  catalog:Optional[DataFrame]=None, logpath:Optional[str]=None, n_works:int=10):
@@ -119,9 +123,11 @@ class WiseDataDownloader:
 
         # download WISE data
         try:
-            t_allwise  = self.query_from_network(coord, "allwise")
             t_neowise  = self.query_from_network(coord, "neowise")
+
+            t_allwise  = self.query_from_network(coord, "allwise")
             t_combined = combine_wisedata(t_neowise=t_neowise, t_allwise=t_allwise)
+
             if return_data: return_content = t_combined.to_pandas()
         except Exception as e:
             logging.error(f"{obj_id}: An exception occurred while querying.", exc_info=True, stack_info=True)
@@ -214,13 +220,19 @@ class WISEDataArchive:
         *,
         radius:Quantity=6*u.arcsec,
         store_dir:Optional[str]=None,
-        return_data:bool=True
+        return_data:bool=True,
+        allwise:bool=True
     ) -> Tuple[bool, Optional[DataFrame]]:
 
         # download WISE data
         try:
-            t_allwise  = self.download_wisetable(coord, "allwise", radius)
             t_neowise  = self.download_wisetable(coord, "neowise", radius)
+
+            if allwise:
+                t_allwise = self.download_wisetable(coord, "allwise", radius)
+            else:
+                t_allwise = None
+
             t_combined = combine_wisedata(t_neowise=t_neowise, t_allwise=t_allwise)
         except Exception as e:
             logging.error(f"{item_id}: An exception occurred while querying.\n{e}")
@@ -251,7 +263,8 @@ class WISEDataArchive:
         store_dir:Optional[str]=None,
         checkpoint:Optional[str]=None,
         n_works:int=4,
-        exception_handler:Callable[[BaseException],Any]=(lambda e: print(e))
+        exception_handler:Callable[[BaseException],Any]=(lambda e: print(e)),
+        allwise:bool=True
     ):
         
         def task(item_id, param):
@@ -263,7 +276,8 @@ class WISEDataArchive:
                 item_id, coord,
                 radius=radius,
                 store_dir=store_dir,
-                return_data=return_data
+                return_data=return_data,
+                allwise=allwise
             )
 
         record = TaskDispatcher(

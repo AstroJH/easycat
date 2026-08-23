@@ -1,11 +1,14 @@
-from .core import LightcurveReprocessor
-
 import astropy.units as u
 import pandas as pd
-from ...util import grp_by_max_interval, find_outliers, databinner, dbscan
+from easycat.util import (
+    # grp_by_max_interval,
+    # find_outliers,
+    # databinner,
+    dbscan
+)
 import numpy as np
 
-class ZTFReprocessor(LightcurveReprocessor):
+class ZTFReprocessor:
     @classmethod
     def can_process(cls, metadata):
         return metadata.get("telescope") == "ZTF"

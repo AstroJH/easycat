@@ -12,7 +12,7 @@ from os.path import join as pjoin
 
 from io import StringIO
 from typing import Optional, Tuple, Literal
-from warnings import deprecated
+# from warnings import deprecated
 
 import requests
 from astropy.table import Table

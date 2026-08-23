@@ -2,7 +2,6 @@ from os import path
 from io import StringIO
 from typing import Optional, Tuple, Literal
 import logging
-from warnings import deprecated
 
 import requests
 from astropy.units import Quantity

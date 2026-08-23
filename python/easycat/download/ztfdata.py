@@ -2,7 +2,7 @@ from os import path
 from io import StringIO
 from typing import Optional, Tuple, Literal
 import logging
-from warnings import deprecated
+# from warnings import deprecated
 
 # from ztfquery import lightcurve
 import requests
@@ -17,7 +17,7 @@ import pandas as pd
 
 BASEURL = "https://irsa.ipac.caltech.edu/cgi-bin/ZTF/nph_light_curves"
 
-@deprecated("Use ZTFDataArchive instead")
+# @deprecated("Use ZTFDataArchive instead")
 class ZTFLightcurveDownloader:
     def __init__(self, radius:Quantity, store_dir:str,
                  catalog:Optional[DataFrame]=None, logpath:Optional[str]=None, n_works:int=10):

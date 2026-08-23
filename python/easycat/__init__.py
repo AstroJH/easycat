@@ -3,7 +3,10 @@ from . import subcat2d
 from . import lightcurve
 from . import parallel
 from . import stats
-from . import astrotools
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+logging.getLogger('easycat')
 
 __all__ = [
     "download",
@@ -11,5 +14,4 @@ __all__ = [
     "lightcurve",
     "parallel",
     "stats",
-    "astrotools",
 ]

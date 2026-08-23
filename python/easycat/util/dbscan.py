@@ -6,7 +6,23 @@ import pandas as pd
 import numba
 
 
-def filter_dbscan(lcurve:pd.DataFrame, pos_ref:SkyCoord, radius:Quantity, min_neighbors:int=4, min_cluster_size=15):
+def filter_dbscan(
+    lcurve: pd.DataFrame,
+    pos_ref: SkyCoord,
+    radius: Quantity,
+    min_neighbors: int = 4,
+    min_cluster_size: int = 15,
+    ra_column: str = 'raj2000',
+    dec_column: str = 'dej2000'
+) -> pd.DataFrame:
+    
+    if ra_column != 'raj2000' or dec_column != 'dej2000':
+        lcurve = lcurve[[ra_column, dec_column]]
+        lcurve = lcurve.rename(columns={
+            ra_column: 'raj2000',
+            dec_column: 'dej2000'
+        })
+
     clusters, _ = dbscan(lcurve, pos_ref, radius, min_neighbors)
 
     for c in clusters:

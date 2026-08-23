@@ -1,15 +1,26 @@
-from .wise import WISEReprocessor
-from .ztf import ZTFReprocessor
-from .core import ReprocessFactory, LightcurveReprocessor
-from .util import bin_lightcurve
+from .factory import (
+    create_grouper,
+    create_aggregator,
+    create_outlier_detector,
+    register_grouper,
+    register_aggregator,
+    register_outlier_detector
+)
+
+from .binning.aggregator import Aggregator
+from .binning.grouper import Grouper
+from .outlier import OutlierDetector
+
 
 __all__ = [
-    "ReprocessFactory",
-    "LightcurveReprocessor",
-    "WISEReprocessor",
-    "ZTFReprocessor",
-    "bin_lightcurve"
+    "create_grouper",
+    "create_aggregator",
+    "create_outlier_detector",
+    "register_grouper",
+    "register_aggregator",
+    "register_outlier_detector",
+    "Grouper",
+    "Aggregator",
+    "OutlierDetector"
 ]
 
-for processor in [WISEReprocessor, ZTFReprocessor]:
-    ReprocessFactory.register(processor)
