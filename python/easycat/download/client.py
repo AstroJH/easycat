@@ -36,16 +36,26 @@ class RateLimiter:
     def __init__(self, min_interval: float = 0.0):
         self.min_interval = max(0.0, min_interval)
         self._lock = threading.Lock()
-        self._last = 0.0
+        self._last: Optional[float] = None
 
     def wait(self) -> None:
+        """Block until the next call is allowed."""
         if self.min_interval <= 0:
             return
+        
         with self._lock:
             now = time.monotonic()
-            delta = now - self._last
-            if delta < self.min_interval:
-                time.sleep(self.min_interval - delta)
+
+            # First call: allow immediately.
+            if self._last is None:
+                self._last = now
+                return
+
+            elapsed = now - self._last
+            if elapsed < self.min_interval:
+                time.sleep(self.min_interval - elapsed)
+
+            # Re-read the clock because sleep() is not exact.
             self._last = time.monotonic()
 
 
@@ -99,6 +109,7 @@ class HttpClient:
             allowed_methods=frozenset(["GET", "HEAD", "POST"]),
             raise_on_status=False,  # return the final response after exhausting retries
         )
+    
         adapter = HTTPAdapter(
             max_retries=retry,
             pool_connections=pool_maxsize,
@@ -107,9 +118,6 @@ class HttpClient:
         self.session.mount("https://", adapter)
         self.session.mount("http://", adapter)
 
-    # ------------------------ #
-    # low level
-    # ------------------------ #
     def get(self, url: str, **kwargs) -> requests.Response:
         self.rate_limiter.wait()
         kwargs.setdefault("timeout", self.timeout)
@@ -165,16 +173,22 @@ class HttpClient:
 
         headers = kwargs.pop("headers", {})
         if offset:
-            headers = {**headers, "Range": f"bytes={offset}-"}
+            headers = {
+                **headers,
+                "Range": f"bytes={offset}-"
+            }
+
         resp = self.get(url, stream=True, headers=headers, **kwargs)
 
         if resp.status_code == 416 and offset:
             # Already complete.
             os.replace(tmp, dest)
             return dest
+        
         if resp.status_code == 200 and offset:
             # Server ignored the Range header; restart from scratch.
             offset = 0
+            
         resp.raise_for_status()
 
         try:
@@ -187,6 +201,7 @@ class HttpClient:
         finally:
             if tmp.exists():
                 tmp.unlink(missing_ok=True)
+
         return dest
 
     def range_request(self, url: str, start: int, end: int, **kwargs) -> bytes:
