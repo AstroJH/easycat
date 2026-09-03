@@ -3,7 +3,6 @@ from .core import intrinsic_variability_amplitude, peak_to_peak_amplitude, gross
 from .core import laughlin1996
 from .core import fit_damped_random_walk
 from .core import sigma_m
-from .sf import calc_sf, calc_esf
 
 __all__ = [
     "weighted_average",
@@ -13,7 +12,5 @@ __all__ = [
     "fractional_variability_amplitude",
     "laughlin1996",
     "fit_damped_random_walk",
-    "calc_sf",
-    "calc_esf",
     "sigma_m"
 ]

@@ -1,13 +1,6 @@
 import numpy as np
-# import pandas as pd
-# from typing import Literal
-# from collections import defaultdict
 
 from scipy.optimize import minimize
-
-# from scipy import stats
-# from statsmodels.tsa.stattools import acf
-# from statsmodels.stats.diagnostic import acorr_ljungbox
 from scipy.special import gammainc
 
 FRAC_PI_2 = np.pi/2
@@ -141,74 +134,3 @@ def fit_damped_random_walk(times, values, errors,
     # tau = 1/np.exp(log_c)
  
     return gp
-
-# def assess_damped_random_walk(
-#     t, y, yerr, gp: GP,
-#     alpha_norm=0.02, alpha_lb=0.02, buffer=0.03, nlags=None
-# ):
-#     y_pred = gp.predict(y, t, return_cov=False)
-#     residuals = y - y_pred
-#     standardized_residuals = residuals / yerr
-
-#     n = len(residuals)
-#     if nlags is None:
-#         nlags = min(20, n // 5)
-    
-#     results = {
-#         'n': n,
-#         'nlags': nlags,
-#         'assessment': 'POOR',  # 默认较差
-#         'details': {}
-#     }
-
-#     # 1. 正态性检验
-#     norm_stat, norm_p = stats.shapiro(residuals)
-
-#     results['details']['normality'] = {
-#         'statistic': norm_stat,
-#         'p_value': norm_p,
-#         'pass': norm_p > alpha_norm
-#     }
-
-#     # 2. 自相关函数分析
-#     acf_values = acf(residuals, nlags=nlags, fft=True)
-#     ci = 1.96 / np.sqrt(n)  # 95% CI
-    
-#     acf_pass = np.all(np.abs(acf_values[1:]) < ci + buffer)  # ignore lag0
-    
-#     results['details']['acf'] = {
-#         'values': acf_values,
-#         'confidence_interval': ci,
-#         'buffer': buffer,
-#         'threshold': ci + buffer,
-#         'pass': acf_pass,
-#         'max_acf': np.max(np.abs(acf_values[1:])),
-#         'lags_exceeding': np.where(np.abs(acf_values[1:]) >= ci + buffer)[0] + 1
-#     }
-    
-#     # 3. Ljung-Box检验
-#     lb_test = acorr_ljungbox(residuals, lags=nlags, return_df=True)
-#     lb_p_values = lb_test['lb_pvalue'].values
-    
-#     lb_pass = np.all(lb_p_values > alpha_lb)
-    
-#     results['details']['ljung_box'] = {
-#         'p_values': lb_p_values,
-#         'threshold': alpha_lb,
-#         'pass': lb_pass,
-#         'min_p_value': np.min(lb_p_values),
-#         'lags_below_threshold': np.where(lb_p_values <= alpha_lb)[0] + 1
-#     }
-    
-#     # 4. 综合评估
-#     norm_ok = results['details']['normality']['pass']
-#     acf_ok = results['details']['acf']['pass']
-#     lb_ok = results['details']['ljung_box']['pass']
-    
-#     # 根据文本标准判断
-#     if norm_ok and (acf_ok or lb_ok):
-#         results['assessment'] = 'GOOD'
-#     else:
-#         results['assessment'] = 'POOR'
-    
-#     return results

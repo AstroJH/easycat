@@ -1,12 +1,4 @@
-from . import download
-from . import subcat2d
-from . import lightcurve
-from . import parallel
-from . import stats
-import logging
-
-logging.basicConfig(level=logging.INFO, format='%(message)s')
-logging.getLogger('easycat')
+"""Easycat astronomical data analysis toolkit."""
 
 __all__ = [
     "download",
@@ -14,4 +6,11 @@ __all__ = [
     "lightcurve",
     "parallel",
     "stats",
+    "astrofilter"
 ]
+
+def __getattr__(name):
+    if name in __all__:
+        import importlib
+        return importlib.import_module(f"{__name__}.{name}")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

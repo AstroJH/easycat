@@ -1,6 +1,7 @@
 __pycache__
 .DS_Store
 .idea
+.pytest_cache/
 target/
 build/
 Cargo.lock
@@ -10,3 +11,17 @@ Cargo.lock
 examples/test.csv
 examples/wise_image.ipynb
 examples/wisedata/
+examples/**/*Paliya*
+astro_filter_db/
+inbox/
+.vscode/
+*.csv
+*.fits
+*.fit
+
+# AI / agent configuration
+AGENTS.md
+CLAUDE.md
+.agents/
+.codex/
+.cursor/

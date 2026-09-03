@@ -7,7 +7,6 @@ from matplotlib import ticker
 
 from astropy.coordinates import SkyCoord
 import pandas as pd
-from ...util import grp_by_max_interval, databinner
 from astropy import units as u
 from astropy.units import Quantity
 

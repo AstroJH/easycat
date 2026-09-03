@@ -9,13 +9,13 @@ from scipy.stats import pearsonr
 from astropy.io import fits
 from astropy.table import Table
 
-from raven.utils import mag2flux, flux2mag
-from easycat.env import ASTRO_FILTER_DB
+from easycat.astrofilter import FilterDB, mag2flux, flux2mag
 from easycat.lightcurve.features import intrinsic_variability_amplitude
 from easycat.pipeline import DataPacket, ProcessingNode
 
-W1 = ASTRO_FILTER_DB.get_filter('WISE.WISE.W1')
-W2 = ASTRO_FILTER_DB.get_filter('WISE.WISE.W2')
+_FILTER_DB = FilterDB()
+W1 = _FILTER_DB.get('WISE/WISE.W1')
+W2 = _FILTER_DB.get('WISE/WISE.W2')
 
 
 class WiseLcLoader(ProcessingNode):

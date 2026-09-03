@@ -1,3 +1,51 @@
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "easycat"
+version = "0.1.0"
+description = "Personal astronomical research toolkit (light curves, survey downloads, filters, catalogues)"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Virjid", email = "astrojh@163.com" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+# NOTE: `easycat.env` and `easycat.catalog` previously relied on private
+# packages (`raven`, `agnkit`) which are NOT on PyPI; they are no longer
+# required.  `celerite` (DRW fitting) is optional: `pip install easycat[drw]`.
+dependencies = [
+    "numpy>=1.20",
+    "scipy>=1.8",
+    "pandas>=1.4",
+    "astropy>=5.0",
+    "astropy-healpix>=0.6",
+    "astroquery>=0.4.6",
+    "matplotlib>=3.5",
+    "scikit-learn>=1.0",
+    "numba>=0.55",
+    "requests>=2.25",
+    "tqdm>=4.60",
+    "PyYAML>=5.4",
+    "progressbar2>=4.0",
+]
+
+[project.optional-dependencies]
+drw = ["celerite>=0.4"]
+
+[project.urls]
+Homepage = "https://github.com/AstroJH/easycat"
+
+[project.scripts]
+easycat = "easycat.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "python" }
+
+[tool.setuptools.packages.find]
+where = ["python"]
+exclude = ["tests*"]
