@@ -1,9 +1,5 @@
 import numpy as np
 from . import dbscan
-from typing import Literal
-from astropy import units as u
-from astropy.units import Quantity
-from numba import jit
 
 __all__ = ["dbscan"]
 
