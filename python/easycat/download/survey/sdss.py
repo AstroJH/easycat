@@ -1,9 +1,25 @@
-"""SDSS photometry / spectra downloader.
+"""SDSS downloader: spectra, photometry, MaNGA IFU data and images.
 
-Uses the SkyServer Cross-ID web service (via :mod:`astroquery.sdss`) to
-cross-match a batch of coordinates in a *single* request, then downloads
-the individual ``lite`` spectra from the Science Archive Server (SAS) by
-``survey / plate / mjd / fiber``.
+Modes
+-----
+``"spectra"`` / ``"photometry"`` / ``"both"``
+    SkyServer Cross-ID (batch) -> SAS ``lite`` spectra by
+    ``survey/plate/mjd/fiber`` (photometry fallback).
+``"manga"``
+    MaNGA IFU data.  Targets are matched against the DRP summary catalogue
+    (``drpall``, read lazily column-by-column) to obtain
+    ``plate``/``ifudsgn``, then the requested product is fetched from SAS::
+
+        DRP:  <sas>/manga/spectro/redux/<ver>/<plate>/stack/
+                  manga-<plate>-<ifu>-<LOGRSS|LINRSS|LOGCUBE|LINCUBE>.fits.gz
+        DAP:  <sas>/manga/spectro/analysis/<ver>/<dapver>/<DAPTYPE>/
+                  <plate>/<ifu>/manga-<plate>-<ifu>-<MAPS|LOGCUBE>-<DAPTYPE>.fits.gz
+
+``"image"``
+    SkyServer image cutouts (JPEG, ``ImgCutout/getjpeg``).  Note that the
+    service occasionally times out for large cutouts in some fields --
+    reducing ``image_width``/``image_height`` (or increasing ``image_scale``)
+    usually helps.
 """
 from __future__ import annotations
 
@@ -11,16 +27,18 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 from astropy.coordinates import SkyCoord
+from astropy.io import fits
 from astropy.table import Table
 import astropy.units as u
 from astroquery.sdss import SDSS
 
 from ..base import FetchContext, ItemResult, SurveyArchive
+from ..client import RangeFile
 
 logger = logging.getLogger("easycat.download")
 
@@ -47,6 +65,22 @@ SURVEY_PATHS: Dict[str, List[str]] = {
 
 PHOTO_COLUMNS = ["OBJID", "RA", "DEC", "U", "G", "R", "I", "Z", "TYPE"]
 
+# ---- MaNGA (SDSS-IV IFU survey) ------------------------------------------ #
+# MaNGA DRP v3_1_1 is served from the DR17 tree (DR18 has no manga/ path).
+MANGA_SAS = "https://data.sdss.org/sas/dr17"
+MANGA_DRPALL = f"{MANGA_SAS}/manga/spectro/redux/v3_1_1/drpall-v3_1_1.fits"
+
+# DRP 3D products (per plate/ifudesign, under <plate>/stack/)
+MANGA_DRP_PRODUCTS = ("LOGRSS", "LINRSS", "LOGCUBE", "LINCUBE")
+# MaNGA DAP products (per plate/ifudesign, under <DAPTYPE>/<plate>/<ifu>/)
+MANGA_DAP_PRODUCTS = ("MAPS", "LOGCUBE")
+MANGA_DAPTYPES = ("SPX-MILESHC-MASTARSSP", "HYB10-MILESHC-MASTARSSP",
+                  "HYB10-MILESHC-MASTARHC2", "VOR10-MILESHC-MASTARSSP")
+
+# ---- SkyServer image cutouts -------------------------------------------- #
+SKYSERVER = "https://skyserver.sdss.org/dr18"
+IMGCUTOUT_URL = f"{SKYSERVER}/SkyServerWS/ImgCutout/getjpeg"
+
 # The SkyServer Cross-ID tool is not meant to be hammered concurrently;
 # serialise the cross-match step (spectrum downloads still parallelise).
 _CROSSID_LOCK = threading.Lock()
@@ -66,17 +100,90 @@ class SDSSArchive(SurveyArchive):
     name = "sdss"
     default_batch_size = 32
 
-    def __init__(self, *, mode: str = "both", radius_arcsec: float = 3.0):
-        if mode not in ("spectra", "photometry", "both"):
-            raise ValueError(f"unknown mode: {mode!r}")
+    def __init__(
+        self,
+        *,
+        mode: str = "both",
+        radius_arcsec: float = 3.0,
+        # -- MaNGA (mode="manga") --
+        manga_product: str = "LOGRSS",
+        manga_dap: Optional[str] = None,
+        manga_drpall: Optional[str] = None,
+        manga_sas: str = MANGA_SAS,
+        manga_version: str = "v3_1_1",
+        manga_dap_version: str = "3.1.0",
+        # -- images (mode="image") --
+        image_width: int = 512,
+        image_height: int = 512,
+        image_scale: float = 0.3,
+        image_opt: str = "",
+        cache_dir: Optional[Path] = None,
+    ):
+        if mode not in ("spectra", "photometry", "both", "manga", "image"):
+            raise ValueError(
+                "mode must be one of spectra/photometry/both/manga/image, "
+                f"got {mode!r}"
+            )
         super().__init__(mode=mode, radius_arcsec=radius_arcsec)
         self.mode = mode
         self.radius_arcsec = float(radius_arcsec)
+
+        # MaNGA options
+        self.manga_product = str(manga_product).upper()
+        self.manga_dap = str(manga_dap).upper() if manga_dap else None
+        self.manga_sas = manga_sas.rstrip("/")
+        self.manga_version = manga_version
+        self.manga_dap_version = manga_dap_version
+        # a local drpall file, or an explicit URL/path override
+        self.manga_drpall = manga_drpall
+        if mode == "manga":
+            if self.manga_dap is None:
+                if self.manga_product not in MANGA_DRP_PRODUCTS:
+                    raise ValueError(
+                        f"unknown MaNGA DRP product {manga_product!r} "
+                        f"(available: {list(MANGA_DRP_PRODUCTS)})"
+                    )
+            else:
+                if self.manga_dap not in MANGA_DAPTYPES:
+                    raise ValueError(
+                        f"unknown MaNGA DAPTYPE {manga_dap!r} "
+                        f"(available: {list(MANGA_DAPTYPES)})"
+                    )
+                if self.manga_product not in MANGA_DAP_PRODUCTS:
+                    raise ValueError(
+                        f"unknown MaNGA DAP product {manga_product!r} "
+                        f"(available: {list(MANGA_DAP_PRODUCTS)})"
+                    )
+
+        # image options
+        self.image_width = int(image_width)
+        self.image_height = int(image_height)
+        self.image_scale = float(image_scale)
+        self.image_opt = image_opt
+
+        self.cache_dir = Path(cache_dir) if cache_dir else None
+
+        # cross-ID is batched; MaNGA/images are one request per source
+        self.default_batch_size = 1 if mode in ("manga", "image") else 32
+
+        self._manga_lock = threading.Lock()
+        self._manga_index = None
 
     # ------------------------------------------------------------------ #
     # SurveyArchive
     # ------------------------------------------------------------------ #
     def fetch_batch(self, rows: pd.DataFrame, ctx: FetchContext) -> List[ItemResult]:
+        if self.mode == "manga":
+            return self._fetch_manga_batch(rows, ctx)
+        if self.mode == "image":
+            return self._fetch_image_batch(rows, ctx)
+        return self._fetch_crossid_batch(rows, ctx)
+
+    # ------------------------------------------------------------------ #
+    # spectra / photometry (SkyServer Cross-ID)
+    # ------------------------------------------------------------------ #
+    def _fetch_crossid_batch(self, rows: pd.DataFrame,
+                             ctx: FetchContext) -> List[ItemResult]:
         coords = SkyCoord(
             [float(r[ctx.ra_column]) for _, r in rows.iterrows()],
             [float(r[ctx.dec_column]) for _, r in rows.iterrows()],
@@ -204,3 +311,158 @@ class SDSSArchive(SurveyArchive):
         t = Table(data)
         t.meta = {}
         t.write(out, overwrite=True)
+
+    # ------------------------------------------------------------------ #
+    # MaNGA IFU data (mode="manga")
+    # ------------------------------------------------------------------ #
+    def _cache_root(self, ctx: FetchContext) -> Path:
+        root = self.cache_dir or (ctx.store_dir / "_sdss_cache")
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    MANGA_INDEX_COLUMNS = ("plate", "ifudsgn", "plateifu", "objra", "objdec")
+
+    def manga_index(self, ctx: FetchContext) -> Dict[str, np.ndarray]:
+        """Lazy MaNGA DRP summary (``drpall``) index.
+
+        ``drpall`` is a wide table (~75 MB); individual columns cannot be
+        read cheaply by byte range, so it is downloaded **once** into the
+        cache directory and read locally afterwards.  Use ``manga_drpall``
+        to point at an existing local file (or a different URL) instead.
+        """
+        if self._manga_index is not None:
+            return self._manga_index
+        with self._manga_lock:
+            if self._manga_index is not None:
+                return self._manga_index
+
+            local = None
+            if self.manga_drpall and Path(self.manga_drpall).exists():
+                local = Path(self.manga_drpall)
+            if local is None:
+                cache = self._cache_root(ctx)
+                local = cache / f"drpall-{self.manga_version}.fits"
+                if not local.exists():
+                    url = self.manga_drpall or (
+                        f"{self.manga_sas}/manga/spectro/redux/"
+                        f"{self.manga_version}/drpall-{self.manga_version}.fits"
+                    )
+                    logger.info("downloading MaNGA drpall (%.0f MB) -> %s",
+                                75, local)
+                    ctx.client.download_file(url, local)
+
+            with fits.open(local, memmap=False) as hdul:
+                data = hdul[1].data
+                self._manga_index = {
+                    c: np.asarray(data[c]) for c in self.MANGA_INDEX_COLUMNS
+                }
+        return self._manga_index
+
+    def manga_url(self, plate: int, ifudesign: int, *,
+                  product: Optional[str] = None,
+                  dap: Optional[str] = None) -> str:
+        """SAS URL of one MaNGA product (DRP or DAP)."""
+        product = (product or self.manga_product).upper()
+        dap = (dap if dap is not None else self.manga_dap)
+        if dap:
+            dap = dap.upper()
+            return (f"{self.manga_sas}/manga/spectro/analysis/"
+                    f"{self.manga_version}/{self.manga_dap_version}/{dap}/"
+                    f"{plate}/{ifudesign}/"
+                    f"manga-{plate}-{ifudesign}-{product}-{dap}.fits.gz")
+        return (f"{self.manga_sas}/manga/spectro/redux/{self.manga_version}/"
+                f"{plate}/stack/manga-{plate}-{ifudesign}-{product}.fits.gz")
+
+    @staticmethod
+    def _plate_ifu_from_row(row: pd.Series) -> Optional[Tuple[int, int]]:
+        """Read ``(plate, ifudesign)`` from a catalog row when available.
+
+        Avoids downloading the 75 MB ``drpall`` when the input catalog
+        already carries MaNGA identifiers (``plate``+``ifudsgn`` or
+        ``plateifu`` like ``"8138-12704"``).
+        """
+        for plate_col, ifu_col in (("plate", "ifudsgn"), ("plate", "ifudesign"),
+                                   ("PLATE", "IFUDSGN")):
+            if plate_col in row.index and ifu_col in row.index:
+                try:
+                    return int(row[plate_col]), int(row[ifu_col])
+                except (TypeError, ValueError):
+                    pass
+        for col in ("plateifu", "PLATEIFU"):
+            if col in row.index:
+                s = str(row[col])
+                if "-" in s:
+                    a, b = s.split("-")[:2]
+                    try:
+                        return int(a), int(b)
+                    except ValueError:
+                        pass
+        return None
+
+    def _fetch_manga_batch(self, rows: pd.DataFrame,
+                           ctx: FetchContext) -> List[ItemResult]:
+        # the drpall index is only needed for rows without MaNGA ids
+        idx = None
+        if any(self._plate_ifu_from_row(row) is None
+               for _, row in rows.iterrows()):
+            idx = self.manga_index(ctx)
+            coords = SkyCoord(idx["objra"], idx["objdec"], unit="deg")
+
+        results: List[ItemResult] = []
+
+        for _, row in rows.iterrows():
+            obj_id = ctx.row_id(row)
+            plate_ifu = self._plate_ifu_from_row(row)
+
+            if plate_ifu is None:
+                ra, dec = ctx.row_coord(row)
+                target = SkyCoord(ra, dec, unit="deg")
+                sep = target.separation(coords).to_value(u.arcsec)
+                j = int(np.argmin(sep)) if len(sep) else -1
+                if j < 0 or sep[j] > self.radius_arcsec:
+                    results.append(ItemResult(obj_id=obj_id, success=True,
+                                              data=None))
+                    continue
+                plate, ifu = int(idx["plate"][j]), int(idx["ifudsgn"][j])
+            else:
+                plate, ifu = plate_ifu
+            url = self.manga_url(plate, ifu)
+            dest = ctx.store_dir / f"{obj_id}.fits.gz"
+            try:
+                ctx.client.download_file(url, dest, overwrite=True)
+                results.append(ItemResult(obj_id=obj_id, success=True, data=dest))
+            except Exception as exc:
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                if status == 404:      # target exists, product not available
+                    results.append(ItemResult(obj_id=obj_id, success=True, data=None))
+                else:
+                    results.append(
+                        ItemResult(obj_id=obj_id, success=False, error=repr(exc))
+                    )
+        return results
+
+    # ------------------------------------------------------------------ #
+    # image cutouts (mode="image")
+    # ------------------------------------------------------------------ #
+    def image_url(self, ra: float, dec: float) -> str:
+        """SkyServer ``ImgCutout`` JPEG URL."""
+        return (f"{IMGCUTOUT_URL}?ra={ra}&dec={dec}"
+                f"&width={self.image_width}&height={self.image_height}"
+                f"&scale={self.image_scale}&opt={self.image_opt}")
+
+    def _fetch_image_batch(self, rows: pd.DataFrame,
+                           ctx: FetchContext) -> List[ItemResult]:
+        results: List[ItemResult] = []
+        for _, row in rows.iterrows():
+            obj_id = ctx.row_id(row)
+            ra, dec = ctx.row_coord(row)
+            dest = ctx.store_dir / f"{obj_id}.jpg"
+            try:
+                ctx.client.download_file(self.image_url(ra, dec), dest,
+                                         overwrite=True)
+                results.append(ItemResult(obj_id=obj_id, success=True, data=dest))
+            except Exception as exc:
+                results.append(
+                    ItemResult(obj_id=obj_id, success=False, error=repr(exc))
+                )
+        return results

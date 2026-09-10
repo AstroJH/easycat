@@ -7,6 +7,9 @@ Two kinds of data are supported (selected via ``mode``):
   selection (g/r/z + WISE W1/W2). Each brick file is downloaded once and
   cached, then all sources inside the brick are matched locally.
 
+* ``"image"`` — cutouts from the DESI Legacy Imaging Surveys viewer
+  (``legacysurvey.org/viewer/cutout.fits`` or ``.jpg``).
+
 * ``"spectra"`` — DESI DR1 coadded spectra.  DESI stores spectra per
   HEALPix pixel (nside=64, nested scheme); each ``coadd-*.fits`` file
   contains every target in a pixel and can be ~1 GB.  Instead of
@@ -44,6 +47,12 @@ BRICKS_RELPATH = "survey-bricks.fits.gz"
 # DESI targeting used Legacy Surveys (LS) DR9.
 # NOTE: DR10 updated the southern (DECaLS) footprint.
 LS_RELEASES = ("dr9", "dr10")
+
+# --------------------------------------------------------------------------- #
+# DESI / Legacy Surveys images (viewer cutout service)
+# --------------------------------------------------------------------------- #
+LS_VIEWER = "https://www.legacysurvey.org/viewer"
+LS_IMAGE_LAYERS = ("ls-dr10", "ls-dr9", "ls-dr10-south", "ls-dr10-north")
 
 # --------------------------------------------------------------------------- #
 # DESI spectra (DR1, "iron" production)
@@ -114,8 +123,9 @@ class DESIArchive(SurveyArchive):
     Parameters
     ----------
     mode : str
-        ``"photometry"`` (Legacy Surveys Tractor) or ``"spectra"``
-        (DESI DR1 coadds via HTTP Range).
+        ``"photometry"`` (Legacy Surveys Tractor), ``"spectra"``
+        (DESI DR1 coadds via HTTP Range) or ``"image"`` (Legacy Surveys
+        image cutouts).
     radius_arcsec : float
         Matching radius.
     ls_release : str
@@ -133,13 +143,22 @@ class DESIArchive(SurveyArchive):
     def __init__(
         self,
         *,
-        mode: Literal["photometry", "spectra"] = "photometry",
+        mode: Literal["photometry", "spectra", "image"] = "photometry",
         radius_arcsec: float = 3.0,
         ls_release: str = "dr9",
         cache_dir: Optional[Path] = None,
+        # -- images (mode="image") --
+        image_layer: str = "ls-dr10",
+        image_format: Literal["fits", "jpg"] = "fits",
+        image_size: int = 256,
+        image_pixscale: float = 0.262,
     ):
-        if mode not in ("photometry", "spectra"):
-            raise ValueError(f"mode must be 'photometry' or 'spectra', got {mode!r}")
+        if mode not in ("photometry", "spectra", "image"):
+            raise ValueError(
+                f"mode must be 'photometry', 'spectra' or 'image', got {mode!r}"
+            )
+        if image_format not in ("fits", "jpg"):
+            raise ValueError(f"image_format must be 'fits' or 'jpg', got {image_format!r}")
         
         super().__init__(
             mode=mode,
@@ -151,6 +170,14 @@ class DESIArchive(SurveyArchive):
         self.radius_arcsec = float(radius_arcsec)
         self.ls_release = ls_release
         self.cache_dir = Path(cache_dir) if cache_dir else None
+
+        # image options
+        self.image_layer = image_layer
+        self.image_format = image_format
+        self.image_size = int(image_size)
+        self.image_pixscale = float(image_pixscale)
+        if mode == "image":
+            self.default_batch_size = 1        # one cutout request per source
 
         # In-memory caches shared across fetch_batch calls in one process.
         self._bricks: Optional[Table]        = None
@@ -164,7 +191,9 @@ class DESIArchive(SurveyArchive):
     def fetch_batch(self, rows: pd.DataFrame, ctx: FetchContext) -> List[ItemResult]:
         if self.mode == "photometry":
             return self._fetch_photometry_batch(rows, ctx)
-        
+        if self.mode == "image":
+            return self._fetch_image_batch(rows, ctx)
+
         return self._fetch_spectra_batch(rows, ctx)
 
     # ------------------------------------------------------------------ #
@@ -454,6 +483,38 @@ class DESIArchive(SurveyArchive):
             return z, st
         except Exception:
             return None, None
+
+    # ------------------------------------------------------------------ #
+    # images (Legacy Surveys viewer cutouts)
+    # ------------------------------------------------------------------ #
+    def image_url(self, ra: float, dec: float, *,
+                  layer: Optional[str] = None,
+                  fmt: Optional[str] = None) -> str:
+        """Legacy Surveys viewer cutout URL (FITS or JPEG)."""
+        layer = layer or self.image_layer
+        fmt = fmt or self.image_format
+        ext = "fits" if fmt == "fits" else "jpg"
+        return (f"{LS_VIEWER}/cutout.{ext}?ra={ra:.7f}&dec={dec:.7f}"
+                f"&layer={layer}&size={self.image_size}"
+                f"&pixscale={self.image_pixscale}")
+
+    def _fetch_image_batch(self, rows: pd.DataFrame,
+                           ctx: FetchContext) -> List[ItemResult]:
+        ext = "fits" if self.image_format == "fits" else "jpg"
+        results: List[ItemResult] = []
+        for _, row in rows.iterrows():
+            obj_id = ctx.row_id(row)
+            ra, dec = ctx.row_coord(row)
+            dest = ctx.store_dir / f"{obj_id}.{ext}"
+            try:
+                ctx.client.download_file(self.image_url(ra, dec), dest,
+                                         overwrite=True)
+                results.append(ItemResult(obj_id=obj_id, success=True, data=dest))
+            except Exception as exc:
+                results.append(
+                    ItemResult(obj_id=obj_id, success=False, error=repr(exc))
+                )
+        return results
 
     # ------------------------------------------------------------------ #
     # helpers

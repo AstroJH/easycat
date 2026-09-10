@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from typing import Union, Tuple, Literal, Optional
-from numpy.typing import ArrayLike, NDArray
+from numpy.typing import ArrayLike
 
 import numpy as np
 import pandas as pd
@@ -9,8 +9,8 @@ from scipy.stats import pearsonr
 from astropy.io import fits
 from astropy.table import Table
 
-from easycat.astrofilter import FilterDB, mag2flux, flux2mag
-from easycat.lightcurve.features import intrinsic_variability_amplitude
+from easycat.astrofilter import FilterDB
+from easycat.util.photometry import mag2flux, flux2mag
 from easycat.pipeline import DataPacket, ProcessingNode
 
 _FILTER_DB = FilterDB()
@@ -333,12 +333,12 @@ class WiseAnalyzer(ProcessingNode):
         data.add_result(key='cmax', value=cmax, node_name=self.name)
         data.add_result(key='dt4dc', value=dt, node_name=self.name)
 
-        w1varamp = intrinsic_variability_amplitude(w1mag, w1err, False) # * np.sqrt(1+row.Z)
-        w2varamp = intrinsic_variability_amplitude(w2mag, w2err, False) # * np.sqrt(1+row.Z)
+        # w1varamp = intrinsic_variability_amplitude(w1mag, w1err, False) # * np.sqrt(1+row.Z)
+        # w2varamp = intrinsic_variability_amplitude(w2mag, w2err, False) # * np.sqrt(1+row.Z)
         w1varerr = np.sqrt(np.mean(w1err**2))
         w2varerr = np.sqrt(np.mean(w2err**2))
-        data.add_result(key='w1varamp', value=w1varamp, node_name=self.name)
-        data.add_result(key='w2varamp', value=w2varamp, node_name=self.name)
+        # data.add_result(key='w1varamp', value=w1varamp, node_name=self.name)
+        # data.add_result(key='w2varamp', value=w2varamp, node_name=self.name)
         data.add_result(key='w1varerr', value=w1varerr, node_name=self.name)
         data.add_result(key='w2varerr', value=w2varerr, node_name=self.name)
 
