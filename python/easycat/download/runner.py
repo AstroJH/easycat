@@ -88,8 +88,8 @@ class DownloadRunner:
         progress: bool = True,
         save_interval: float = 5.0,
         id_column: str = "obj_id",
-        ra_column: str = "raj2000",
-        dec_column: str = "dej2000",
+        ra_column: str = "ra",
+        dec_column: str = "dec",
         radius_arcsec: float = 3.0,
         client_kwargs: Optional[dict] = None,
     ):

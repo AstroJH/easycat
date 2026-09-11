@@ -122,16 +122,35 @@ def combine_wisedata(t_neowise: Optional[Table], t_allwise: Optional[Table]) -> 
 
 
 def _build_ipac_table(rows: pd.DataFrame, ra_col: str, dec_col: str) -> str:
-    """Build the IPAC table body for a Gator Upload cone search."""
+    """Build the IPAC table body for a Gator Upload cone search.
+
+    The uploaded table is parsed by IRSA as **fixed width**: the data values
+    must line up with the column positions declared by the header rows.  A
+    value wider than its declared column (e.g. ``-10.5105495`` - a two-digit
+    negative Dec - or a three-digit RA) shifts the following column and makes
+    Gator reject the whole table with the misleading message
+    ``Table format is not right.``.
+
+    Column widths are therefore computed from the actual values (7 decimals,
+    so at most 3+1+7 = 11 characters), and header / type / data rows are all
+    aligned to those widths.  Data rows stay whitespace separated (no ``|``),
+    which is what Gator expects when reading the values.
+    """
+    ra_strs = [f"{float(v):.7f}" for v in rows[ra_col]]
+    dec_strs = [f"{float(v):.7f}" for v in rows[dec_col]]
+
+    w_ra = max([len("ra"), len("double")] + [len(s) for s in ra_strs])
+    w_dec = max([len("dec"), len("double")] + [len(s) for s in dec_strs])
+
     lines = [
         "\\ EQUINOX = J2000.0",
-        "|   ra     |   dec    |",
-        "|   double |   double |",
+        f"|{'ra':^{w_ra}}|{'dec':^{w_dec}}|",
+        f"|{'double':^{w_ra}}|{'double':^{w_dec}}|",
     ]
-    for _, row in rows.iterrows():
-        ra = float(row[ra_col])
-        dec = float(row[dec_col])
-        lines.append(f" {ra:.7f}  {dec:.7f}")
+    lines += [
+        f" {ra:>{w_ra}} {dec:>{w_dec}}"
+        for ra, dec in zip(ra_strs, dec_strs)
+    ]
     return "\n".join(lines)
 
 
