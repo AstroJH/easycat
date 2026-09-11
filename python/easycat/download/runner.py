@@ -36,12 +36,15 @@ class RunSummary:
     skipped: int = 0
     interrupted: bool = False
     failed_ids: List[str] = field(default_factory=list)
+    recovered: int = 0
+    recovered_ids: List[str] = field(default_factory=list)
 
     def __str__(self) -> str:
         status = " (interrupted, run again to resume)" if self.interrupted else ""
+        recovered = f" recovered={self.recovered}" if self.recovered else ""
         return (
             f"total={self.total} completed={self.completed} "
-            f"failed={self.failed} skipped={self.skipped}{status}"
+            f"failed={self.failed} skipped={self.skipped}{recovered}{status}"
         )
 
 
@@ -114,12 +117,69 @@ class DownloadRunner:
         self.radius_arcsec = radius_arcsec
         self.client = HttpClient(**(client_kwargs or {}))
 
+    def _make_context(self) -> FetchContext:
+        return FetchContext(
+            store_dir=self.store_dir,
+            client=self.client,
+            id_column=self.id_column,
+            ra_column=self.ra_column,
+            dec_column=self.dec_column,
+            radius_arcsec=self.radius_arcsec,
+        )
+
+    def recover_from_disk(self, *, warn: bool = True) -> List[str]:
+        """Mark sources whose output file already exists as done.
+
+        Safety net for hard interrupts (SIGKILL, kernel restart, closed
+        notebook): the archives write their file *before* the runner records
+        the result, so a finished download can be missing from the
+        checkpoint.  Such sources are marked done (with a warning) instead of
+        being downloaded again.
+
+        Returns
+        -------
+        list of str
+            The source ids that were recovered from files on disk.
+        """
+        ids = [str(i) for i in self.catalog[self.id_column]]
+        ctx = self._make_context()
+        recovered: List[str] = []
+
+        for obj_id in self.checkpoint.pending(ids):
+            try:
+                path = self.archive.output_path(ctx, obj_id)
+            except Exception as exc:      # never break a run because of this
+                logger.debug("output_path() failed for %s: %s", obj_id, exc)
+                continue
+            if path is not None and Path(path).exists():
+                self.checkpoint.mark_done(obj_id)
+                recovered.append(obj_id)
+                logger.debug("recovered %s from %s", obj_id, path)
+
+        if recovered:
+            self.checkpoint.save()
+            if warn:
+                preview = ", ".join(recovered[:5])
+                if len(recovered) > 5:
+                    preview += f", ... (+{len(recovered) - 5} more)"
+                logger.warning(
+                    "%d source(s) already have output files on disk but were "
+                    "missing from the checkpoint (e.g. after a hard "
+                    "interrupt); marking them as done: %s",
+                    len(recovered), preview,
+                )
+        return recovered
+
     def run(self) -> RunSummary:
         ids = [str(i) for i in self.catalog[self.id_column]]
         summary = RunSummary(total=len(ids))
 
+        # safety net: count files that are already on disk as done
+        summary.recovered_ids = self.recover_from_disk()
+        summary.recovered = len(summary.recovered_ids)
+
         todo = self.checkpoint.pending(ids)
-        summary.skipped = len(ids) - len(todo)
+        summary.skipped = len(ids) - len(todo) - summary.recovered
 
         remaining = todo
         passes = 0
@@ -153,14 +213,7 @@ class DownloadRunner:
     ) -> List[str]:
         """Run one pass over ``ids``; returns the ids that failed again."""
         batches = self._build_batches(ids)
-        ctx = FetchContext(
-            store_dir=self.store_dir,
-            client=self.client,
-            id_column=self.id_column,
-            ra_column=self.ra_column,
-            dec_column=self.dec_column,
-            radius_arcsec=self.radius_arcsec,
-        )
+        ctx = self._make_context()
 
         n_done = 0
         failed_again: List[str] = []
@@ -192,20 +245,8 @@ class DownloadRunner:
                             for _, row in rows.iterrows()
                         ]
 
-                    if len(results) != len(rows):
-                        raise RuntimeError(
-                            f"{self.archive.name}.fetch_batch returned "
-                            f"{len(results)} results for {len(rows)} rows"
-                        )
-
-                    for (_, row), result in zip(rows.iterrows(), results):
-                        obj_id = ctx.row_id(row)
-                        if result.success:
-                            self.checkpoint.mark_done(obj_id)
-                            n_done += 1
-                        else:
-                            self.checkpoint.mark_failed(obj_id, result.error)
-                            failed_again.append(obj_id)
+                    n_done += self._record_batch(rows, results, ctx,
+                                                 failed_again)
                     if pbar is not None:
                         pbar.update(len(rows))
 
@@ -214,14 +255,37 @@ class DownloadRunner:
                         self.checkpoint.save()
                         last_save = now
             except KeyboardInterrupt:
-                logger.warning("Stopping... waiting for in-flight batches.")
+                logger.warning(
+                    "Stopping... waiting for in-flight batches "
+                    "(results already written to disk are recorded first)."
+                )
                 for f in futures:
                     f.cancel()
 
-                # drain running ones
+                # Drain running batches AND record their results: the files
+                # are already on disk, so leaving them unmarked would make
+                # the checkpoint disagree with reality (and would re-download
+                # them on the next run).
                 for f in as_completed(futures):
-                    pass
-                
+                    rows = futures[f]
+                    if f.cancelled():
+                        continue
+                    try:
+                        results = f.result()
+                        n_done += self._record_batch(rows, results, ctx,
+                                                     failed_again)
+                    except Exception as exc:
+                        logger.warning(
+                            "Batch finished during interrupt but could not "
+                            "be recorded (%d sources): %s", len(rows), exc
+                        )
+                    if pbar is not None:
+                        pbar.update(len(rows))
+
+                # persist immediately so an interrupted run resumes correctly
+                self.checkpoint.save()
+                if pbar is not None:
+                    pbar.close()
                 raise
 
         if pbar is not None:
@@ -230,6 +294,30 @@ class DownloadRunner:
         summary.completed += n_done
         self.checkpoint.save()
         return failed_again
+
+    def _record_batch(
+        self,
+        rows: pd.DataFrame,
+        results: Sequence[ItemResult],
+        ctx: FetchContext,
+        failed_again: List[str],
+    ) -> int:
+        """Mark one batch's items in the checkpoint; return #done."""
+        if len(results) != len(rows):
+            raise RuntimeError(
+                f"{self.archive.name}.fetch_batch returned "
+                f"{len(results)} results for {len(rows)} rows"
+            )
+        n_done = 0
+        for (_, row), result in zip(rows.iterrows(), results):
+            obj_id = ctx.row_id(row)
+            if result.success:
+                self.checkpoint.mark_done(obj_id)
+                n_done += 1
+            else:
+                self.checkpoint.mark_failed(obj_id, result.error)
+                failed_again.append(obj_id)
+        return n_done
 
     def _build_batches(self, ids: Sequence[str]) -> List[pd.DataFrame]:
         id_set = set(ids)

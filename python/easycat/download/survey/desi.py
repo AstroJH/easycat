@@ -199,6 +199,13 @@ class DESIArchive(SurveyArchive):
     # ------------------------------------------------------------------ #
     # photometry
     # ------------------------------------------------------------------ #
+    def output_path(self, ctx: FetchContext, obj_id: str) -> Path:
+        """Per-source output file, depending on the mode."""
+        if self.mode == "image":
+            ext = "fits" if self.image_format == "fits" else "jpg"
+            return ctx.store_dir / f"{obj_id}.{ext}"
+        return ctx.store_dir / f"{obj_id}.fits"       # photometry / spectra
+
     def _fetch_photometry_batch(
         self, rows: pd.DataFrame, ctx: FetchContext
     ) -> List[ItemResult]:

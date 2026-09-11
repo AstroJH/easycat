@@ -70,6 +70,10 @@ class ZTFArchive(SurveyArchive):
             results.append(self._fetch_one(row, ctx))
         return results
 
+    def output_path(self, ctx: FetchContext, obj_id: str) -> Path:
+        """Per-source light curve (CSV or FITS, per ``store_format``)."""
+        return ctx.store_dir / f"{obj_id}.{self.store_format}"
+
     def _fetch_one(self, row: pd.Series, ctx: FetchContext) -> ItemResult:
         obj_id = ctx.row_id(row)
         ra, dec = ctx.row_coord(row)

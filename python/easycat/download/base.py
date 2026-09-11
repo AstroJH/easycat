@@ -4,7 +4,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -96,3 +96,19 @@ class SurveyArchive(ABC):
     # storage helpers
     def store_path(self, ctx: FetchContext, obj_id: str, suffix: str) -> Path:
         return ctx.store_dir / f"{obj_id}{suffix}"
+
+    def output_path(self, ctx: FetchContext, obj_id: str) -> Optional[Path]:
+        """Expected output file for one source (or ``None`` if unknown).
+
+        Used as a *safety net* by :class:`~easycat.download.runner.DownloadRunner`:
+        archives write their files before the runner records them, so after a
+        hard interrupt (SIGKILL, kernel restart, closed notebook) a finished
+        download can be missing from the checkpoint.  If this method returns a
+        path that already exists, the runner marks the source as done instead
+        of downloading it again.
+
+        Implementations should return ``None`` when a source may legitimately
+        produce *no* file (e.g. "no data" results), since a missing file must
+        never be interpreted as "not finished".
+        """
+        return None

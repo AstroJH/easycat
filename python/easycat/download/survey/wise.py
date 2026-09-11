@@ -184,6 +184,10 @@ class WISEArchive(SurveyArchive):
     # ---------------------------------------- #
     # SurveyArchive
     # ---------------------------------------- #
+    def output_path(self, ctx: FetchContext, obj_id: str) -> Path:
+        """Per-source light curve (written when WISE data exist)."""
+        return ctx.store_dir / f"{obj_id}.fits"
+
     def fetch_batch(self, rows: pd.DataFrame, ctx: FetchContext) -> List[ItemResult]:
         if len(rows) == 0:
             return []

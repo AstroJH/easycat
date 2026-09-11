@@ -182,6 +182,14 @@ class SDSSArchive(SurveyArchive):
     # ------------------------------------------------------------------ #
     # spectra / photometry (SkyServer Cross-ID)
     # ------------------------------------------------------------------ #
+    def output_path(self, ctx: FetchContext, obj_id: str) -> Path:
+        """Per-source output file, depending on the mode."""
+        if self.mode == "manga":
+            return ctx.store_dir / f"{obj_id}.fits.gz"
+        if self.mode == "image":
+            return ctx.store_dir / f"{obj_id}.jpg"
+        return ctx.store_dir / f"{obj_id}.fits"      # spectra / photometry
+
     def _fetch_crossid_batch(self, rows: pd.DataFrame,
                              ctx: FetchContext) -> List[ItemResult]:
         coords = SkyCoord(
