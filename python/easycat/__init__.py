@@ -2,7 +2,7 @@
 
 __all__ = [
     "download",
-    "subcat2d",
+    "cat2d",
     "lightcurve",
     "parallel",
     "stats",
