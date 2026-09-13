@@ -1,3 +1,10 @@
+"""Historical ZTF reprocessing helper.
+
+This class predates the node-based pipeline and is retained as a compatibility
+utility.  New code should prefer explicit ``ProcessingNode`` implementations,
+which provide validation, cut-flow metrics and batch-runner integration.
+"""
+
 import astropy.units as u
 import pandas as pd
 from easycat.util import (
@@ -9,11 +16,14 @@ from easycat.util import (
 import numpy as np
 
 class ZTFReprocessor:
+    """Legacy helper for basic ZTF cleanup and epoch grouping."""
     @classmethod
     def can_process(cls, metadata):
+        """Return whether metadata identifies a ZTF product."""
         return metadata.get("telescope") == "ZTF"
     
     def reprocess(self, lcurve, **kwargs):
+        """Sort/clean a ZTF light curve and optionally apply a DBSCAN cut."""
         pos_ref = kwargs.get("pos_ref", None)
         dbscan_radius = kwargs.get("dbscan_radius", 0.5*u.arcsec)
         min_neighbors = kwargs.get("min_neighbors", 5)
@@ -40,6 +50,7 @@ class ZTFReprocessor:
     
 
     def group(self, lcurve:pd.DataFrame, epoch_size=1):
+        """Group a sorted ZTF light curve into fixed-width time epochs."""
         mjd = lcurve["mjd"].to_numpy()
         mag = lcurve["mag"].to_numpy()
         magerr = lcurve["magerr"].to_numpy()
@@ -70,4 +81,5 @@ class ZTFReprocessor:
 
     
     def batch_reprocess(self, catalog:pd.DataFrame):
+        """Historical batch entry point, intentionally not implemented here."""
         ...

@@ -1,3 +1,9 @@
+"""Reusable, survey-agnostic light-curve processing nodes.
+
+Nodes operate on a :class:`~easycat.pipeline.core.DataPacket` and should not
+perform batch orchestration, checkpointing or output-directory policy.
+"""
+
 import numpy as np
 import pandas as pd
 import logging
@@ -31,8 +37,16 @@ class PositionFilterNode(ProcessingNode):
     """
     Processing node for filtering light curves based on spatial position.
     
-    Supports both DBSCAN clustering and cone cut methods.
-    Can be used for any telescope data with positional information.
+    Supports both DBSCAN clustering and cone cut methods and can be used for
+    any telescope data with positional information.
+
+    Processing order is:
+
+    1. calculate the maximum separation before filtering;
+    2. optionally retain the dominant DBSCAN cluster around ``pos_ref``;
+    3. optionally apply a hard cone cut in arcseconds.
+
+    The node records the number removed by each stage in ``data.results``.
     """
     def __init__(
         self,
@@ -75,8 +89,10 @@ class PositionFilterNode(ProcessingNode):
             'min_cluster_size': min_cluster_size,
             'cone_radius': cone_radius
         })
+        self.required_columns = (ra_column, dec_column)
 
     def validate(self, data: DataPacket) -> Tuple[bool, Optional[str]]:
+        """Check position columns and the optional reference coordinate."""
         is_valid, error_msg = super().validate(data)
         if not is_valid:
             return False, error_msg
@@ -94,6 +110,7 @@ class PositionFilterNode(ProcessingNode):
         return True, None
 
     def _calc_max_sep(self, lc: pd.DataFrame) -> float:
+        """Return the largest angular offset from the median position."""
         ra_colname = self.config['ra_column']
         dec_colname = self.config['dec_column']
 
@@ -109,11 +126,12 @@ class PositionFilterNode(ProcessingNode):
         return np.max(sep)
 
     def process(self, data: DataPacket) -> DataPacket:
+        """Apply the configured DBSCAN and/or cone-position cuts."""
         lc = data.light_curve.copy()
         initial_count = len(lc)
 
-        # Get position reference from config
-        # pos_ref = self.config['pos_ref']
+        # The reference position is runtime data, not node configuration; this
+        # lets one Pipeline instance be reused for many sources.
         pos_ref = data.metadata.get("pos_ref")
         use_dbscan = self.config['use_dbscan']
         cone_radius = self.config['cone_radius']
@@ -128,7 +146,8 @@ class PositionFilterNode(ProcessingNode):
         else:
             data.add_result('sep_max', None, self.name)
 
-        # Apply DBSCAN if requested
+        # DBSCAN removes additional detections of neighbouring objects in the
+        # same WISE query rather than merely applying a circular cut.
         if use_dbscan:
             try:
                 lc = dbscan.filter_dbscan(
@@ -151,7 +170,7 @@ class PositionFilterNode(ProcessingNode):
                 data.add_error(f"DBSCAN failed - {str(e)}", self.name)
                 return data
         
-        # Apply cone cut if radius specified
+        # Apply a hard reference-radius cut after clustering when requested.
         if cone_radius is not None:
             try:
                 # Convert radius to appropriate units
@@ -193,8 +212,10 @@ class BinningNode(ProcessingNode):
     """
     General node for binning time-series data.
     
-    Groups data into time bins and aggregates values within each bin.
-    Useful for creating long-term light curves from high-cadence data.
+    Groups data into time bins and aggregates values within each bin.  The
+    grouping is computed once from ``time_column`` and shared by every value
+    column.  Each output row contains the bin center, bin size, duration,
+    aggregated values and propagated errors.
     """
     
     def __init__(
@@ -231,11 +252,13 @@ class BinningNode(ProcessingNode):
                 },
             },
         })
+        self.required_columns = (time_column,)
 
         self.grouper = None
         self.aggregators = {}
     
     def validate(self, data: DataPacket) -> Tuple[bool, Optional[str]]:
+        """Validate columns and aggregation configuration without state changes."""
 
         is_valid, error_msg = super().validate(data)
         if not is_valid:
@@ -279,18 +302,14 @@ class BinningNode(ProcessingNode):
                 f"Missing value columns: {missing_columns}"
             )
 
-        # Create time grouper
+        # Validate config factories here, but create fresh stateful instances
+        # in process() so two sources/workers never share mutable helpers.
         try:
-            self.grouper = create_grouper(
-                self.config["group"]
-            )
+            create_grouper(self.config["group"])
         except (TypeError, ValueError) as exc:
             return False, str(exc)
 
-
-        # Create one aggregator for each available value column
         aggregate_config = self.config["aggregate"]
-        self.aggregators = {}
 
         for value_col in available_columns:
 
@@ -302,7 +321,7 @@ class BinningNode(ProcessingNode):
                 )
 
             try:
-                self.aggregators[value_col] = create_aggregator(
+                create_aggregator(
                     aggregate_config[value_col]
                 )
             except (TypeError, ValueError) as exc:
@@ -315,9 +334,14 @@ class BinningNode(ProcessingNode):
         return True, None
     
     def process(self, data: DataPacket) -> DataPacket:
+        """Group observations and aggregate each requested value column."""
         lc = data.light_curve
-        grouper = self.grouper
-        aggregators = self.aggregators
+        grouper = create_grouper(self.config["group"])
+        aggregators = {
+            value_col: create_aggregator(self.config["aggregate"][value_col])
+            for value_col in self.config["value_columns"]
+            if value_col in lc.columns
+        }
 
         time_column = self.config["time_column"]
         value_columns = self.config["value_columns"]
@@ -336,7 +360,8 @@ class BinningNode(ProcessingNode):
             bin_indices = list(range(lo, hi + 1))
             bin_size = hi - lo + 1
             
-            # Calculate bin time (median of bin times)
+            # Bin center is the median observation time; duration is the
+            # within-bin span and is useful for interpreting WISE visits.
             bin_times = times[lo:hi+1]
             bin_center = np.median(bin_times)
             bin_duration = (
@@ -351,7 +376,7 @@ class BinningNode(ProcessingNode):
                 'duration': bin_duration
             }
             
-            # Aggregate each value column
+            # Aggregate each band independently, sharing only the time bins.
             for value_col in value_columns:
                 # Skip columns that are not available.
                 if value_col not in lc.columns:
@@ -402,6 +427,8 @@ class BinningNode(ProcessingNode):
             binned_df = pd.DataFrame()
 
         data.light_curve = binned_df
+        data.add_result("input_rows", len(lc), self.name)
+        data.add_result("output_rows", len(binned_df), self.name)
         return data
 
 
@@ -410,8 +437,11 @@ class OutlierFilterNode(ProcessingNode):
     Processing node for detecting and removing outliers in light curves.
     
     The processing consists of two steps:
-        1. Group data points according to a time-grouping method.
-        2. Detect outliers independently within each group.
+
+    1. group data points according to a time-grouping method;
+    2. detect outliers independently within each group and band.
+
+    A point is removed if any requested value column marks it as an outlier.
 
     Configuration
     -------------
@@ -475,9 +505,10 @@ class OutlierFilterNode(ProcessingNode):
                 'threshold': 5.0,
             },
         })
+        self.required_columns = (time_column,)
     
     def validate(self, data: DataPacket) -> Tuple[bool, Optional[str]]:
-        """Validate that required columns exist."""
+        """Validate columns and detector configuration without state changes."""
 
         is_valid, error_msg = super().validate(data)
         
@@ -519,33 +550,34 @@ class OutlierFilterNode(ProcessingNode):
                 missing_columns
             )
 
-        # Create time grouper and outlier detector.
+        # Construct and discard helpers here to validate user configuration;
+        # process() creates the per-execution instances actually used below.
         try:
-            self.detector = create_outlier_detector(
-                self.config["outlier"]
-            )
-
-            self.grouper = create_grouper(
-                self.config["group"]
-            )
+            create_outlier_detector(self.config["outlier"])
+            create_grouper(self.config["group"])
         except (TypeError, ValueError) as exc:
             return False, str(exc)
 
         return True, None
     
     def process(self, data: DataPacket) -> DataPacket:
-        """Detect and remove outliers from light curve."""
+        """Detect and remove outliers from the light curve."""
         
         lc = data.light_curve.copy()
+        self.detector = create_outlier_detector(self.config["outlier"])
+        self.grouper = create_grouper(self.config["group"])
         # initial_count = len(lc)
         
-        # Get time values
+        # Group first so cadence-dependent noise is compared only within a
+        # physically similar observing window.
         times: NDArray = lc[self.config['time_column']].to_numpy()
         
         # Group data by time
         los, his = self.grouper.group(times)
         
-        # Find outliers within each group
+        # Outlier decisions are made independently per band.  The union is
+        # removed because one obviously bad band measurement contaminates the
+        # resulting colour/magnitude record.
         outlier_indices = set()
         value_columns = self.config["value_columns"]
 
@@ -604,10 +636,18 @@ class OutlierFilterNode(ProcessingNode):
             data.add_result('removed', 0, self.name)
         
         data.light_curve = lc_filtered
+        data.add_result("input_rows", len(lc), self.name)
+        data.add_result("output_rows", len(lc_filtered), self.name)
         return data
 
 
 class EpochCleanNode(ProcessingNode):
+    """Remove observing epochs with too few valid points.
+
+    This node is intended for binned or repeated-exposure data where a single
+    epoch should contain several measurements.  It does not remove individual
+    points; it keeps or drops an entire time group.
+    """
     def __init__(
         self,
         name: str = "EpochClean",
@@ -627,8 +667,10 @@ class EpochCleanNode(ProcessingNode):
             },
             'min_points_per_epoch': min_points_per_epoch
         })
+        self.required_columns = (time_column,)
     
     def validate(self, data: DataPacket) -> Tuple[bool, Optional[str]]:
+        """Validate the time column and grouping configuration."""
         is_valid, error_msg = super().validate(data)
         if not is_valid:
             return False, error_msg
@@ -639,17 +681,19 @@ class EpochCleanNode(ProcessingNode):
         if time_column not in lc.columns:
             return False, f"Time column '{time_column}' not found"
 
+        # Check that the configured grouper can be constructed without
+        # retaining mutable state on the node.
         try:
-            self.grouper = create_grouper(
-                self.config["group"]
-            )
+            create_grouper(self.config["group"])
         except (TypeError, ValueError) as exc:
             return False, str(exc)
         
         return True, None
     
     def process(self, data: DataPacket) -> DataPacket:
+        """Drop epochs below ``min_points_per_epoch``."""
         lc = data.light_curve.copy()
+        self.grouper = create_grouper(self.config["group"])
         initial_count = len(lc)
 
         time_column = self.config['time_column']
@@ -658,7 +702,8 @@ class EpochCleanNode(ProcessingNode):
         times = lc[time_column].to_numpy()
         los, his = self.grouper.group(times)
         
-        # Identify epochs to keep
+        # Work at epoch level so a small visit is either retained as a whole
+        # or rejected as a whole.
         keep_mask = np.full(len(lc), False, dtype=bool)
         epochs_removed = 0
         
@@ -682,6 +727,8 @@ class EpochCleanNode(ProcessingNode):
         data.add_result('epochs_total', len(los), self.name)
         data.add_result('epochs_removed', epochs_removed, self.name)
         data.add_result('points_removed', total_removed, self.name)
+        data.add_result("input_rows", initial_count, self.name)
+        data.add_result("output_rows", len(lc), self.name)
         
         data.light_curve = lc
         return data

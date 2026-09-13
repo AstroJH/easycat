@@ -1,4 +1,7 @@
-from typing import Dict, Type
+"""Node registry and import-based node factory."""
+from __future__ import annotations
+
+from typing import Any, Dict, Type
 import importlib
 import yaml
 import inspect
@@ -11,6 +14,7 @@ logger = logging.getLogger('easycat')
 NODE_REGISTRY: Dict[str, Type[ProcessingNode]] = {}
 
 def register_node(name: str):
+    """Register a ``ProcessingNode`` subclass under a short name."""
     def decorator(cls):
         if name in NODE_REGISTRY:
             raise ValueError(
@@ -23,6 +27,7 @@ def register_node(name: str):
     return decorator
 
 def get_node(name: str):
+    """Return a registered node class by short name."""
 
     if name not in NODE_REGISTRY:
         raise KeyError(
@@ -34,9 +39,10 @@ def get_node(name: str):
 
 
 class NodeFactory:
+    """Create nodes from YAML-style ``class``/``params`` dictionaries."""
 
     @staticmethod
-    def create(node_cfg: dict) -> ProcessingNode:
+    def create(node_cfg: Dict[str, Any]) -> ProcessingNode:
 
         NodeClass = NodeFactory.resolve_class(
             node_cfg["class"]
@@ -68,9 +74,11 @@ class NodeFactory:
         Resolve Node class.
 
         Resolution priority:
-        1. Registered node name (names cannot contain '.')
-        2. Relative import path starting with '.' (relative to ``easycat.pipeline``)
-        2. Absolute Python import path
+
+        1. Registered short node name (no ``.``);
+        2. relative import path beginning with ``.`` (anchored at
+           ``easycat.pipeline``);
+        3. absolute Python import path.
         """
 
         # Try registered node first
@@ -120,6 +128,11 @@ class NodeFactory:
         NodeClass,
         params: Dict
     ):
+        """Filter parameters against a node's constructor signature.
+
+        Unknown parameters are currently logged and ignored for backwards
+        compatibility.  A future strict mode should reject them by default.
+        """
 
         signature = inspect.signature(
             NodeClass.__init__
