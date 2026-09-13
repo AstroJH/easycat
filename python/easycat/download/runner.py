@@ -15,7 +15,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 from tqdm.auto import tqdm
@@ -75,6 +75,19 @@ class DownloadRunner:
         Seconds between checkpoint saves.
     client_kwargs : dict or None
         Keyword arguments for :class:`HttpClient`.
+    dest_fn : callable or None
+        ``(obj_id, default_path[, row]) -> Path`` override applied to every
+        per-source output file (custom on-disk layout).  Two-argument hooks
+        remain supported.
+
+    Notes
+    -----
+    **Threading model**: all worker threads share a single
+    :class:`HttpClient` (and therefore one :class:`requests.Session` with a
+    connection pool).  The session is configured once and not mutated during
+    a run; this keeps rate limiting / retries / connection reuse global.  For
+    per-thread proxies, credentials, certificates or cookies, implement your
+    own archive/worker boundary with one ``HttpClient`` per thread.
     """
 
     def __init__(
@@ -95,6 +108,7 @@ class DownloadRunner:
         dec_column: str = "dec",
         radius_arcsec: float = 3.0,
         client_kwargs: Optional[dict] = None,
+        dest_fn: Optional[Callable[..., Path]] = None,
     ):
         if n_workers < 1:
             raise ValueError("n_workers must be >= 1")
@@ -115,6 +129,7 @@ class DownloadRunner:
         self.ra_column = ra_column
         self.dec_column = dec_column
         self.radius_arcsec = radius_arcsec
+        self.dest_fn = dest_fn
         self.client = HttpClient(**(client_kwargs or {}))
 
     def _make_context(self) -> FetchContext:
@@ -125,6 +140,7 @@ class DownloadRunner:
             ra_column=self.ra_column,
             dec_column=self.dec_column,
             radius_arcsec=self.radius_arcsec,
+            dest_fn=self.dest_fn,
         )
 
     def recover_from_disk(self, *, warn: bool = True) -> List[str]:
@@ -142,12 +158,17 @@ class DownloadRunner:
             The source ids that were recovered from files on disk.
         """
         ids = [str(i) for i in self.catalog[self.id_column]]
+        rows_by_id = {
+            str(row[self.id_column]): row for _, row in self.catalog.iterrows()
+        }
         ctx = self._make_context()
         recovered: List[str] = []
 
         for obj_id in self.checkpoint.pending(ids):
             try:
-                path = self.archive.output_path(ctx, obj_id)
+                path = self.archive.resolve_output_path(
+                    ctx, obj_id, row=rows_by_id.get(obj_id),
+                )
             except Exception as exc:      # never break a run because of this
                 logger.debug("output_path() failed for %s: %s", obj_id, exc)
                 continue
@@ -311,6 +332,8 @@ class DownloadRunner:
         n_done = 0
         for (_, row), result in zip(rows.iterrows(), results):
             obj_id = ctx.row_id(row)
+            path = self.archive.resolve_output_path(ctx, obj_id, row=row)
+            self.archive.enrich_result(result, row=row, dest=path)
             if result.success:
                 self.checkpoint.mark_done(obj_id)
                 n_done += 1
@@ -326,3 +349,111 @@ class DownloadRunner:
         for start in range(0, len(rows), self.batch_size):
             batches.append(rows.iloc[start:start + self.batch_size])
         return batches
+
+
+# --------------------------------------------------------------------------- #
+# convenience: download a list of URLs (no archive required)
+# --------------------------------------------------------------------------- #
+class _UrlListArchive(SurveyArchive):
+    """Internal archive used by :func:`download_urls`."""
+
+    name = "urls"
+    default_batch_size = 1
+
+    def __init__(self, mapping: Dict[str, str], *, overwrite: bool = False,
+                 download_kwargs: Optional[dict] = None):
+        super().__init__(download_kwargs=download_kwargs)
+        self.mapping = dict(mapping)
+        self.overwrite = overwrite
+
+    def _dest(self, ctx: FetchContext, obj_id: str,
+              row: Optional[pd.Series] = None) -> Path:
+        return ctx.dest(obj_id, ctx.store_dir / obj_id, row=row)
+
+    def output_path(self, ctx: FetchContext, obj_id: str, *,
+                    row: Optional[pd.Series] = None) -> Path:
+        return self._dest(ctx, obj_id, row=row)
+
+    def fetch_batch(self, rows, ctx):
+        results = []
+        for _, row in rows.iterrows():
+            obj_id = ctx.row_id(row)
+            dest = self._dest(ctx, obj_id, row=row)
+            try:
+                self._download_file(
+                    ctx, self.mapping[obj_id], dest,
+                    overwrite=self.overwrite,
+                )
+                result = ItemResult(obj_id=obj_id, success=True, data=dest)
+                results.append(self.enrich_result(
+                    result, row=row, url=self.mapping[obj_id], dest=dest,
+                ))
+            except Exception as exc:
+                result = ItemResult(
+                    obj_id=obj_id, success=False, error=repr(exc),
+                )
+                results.append(self.enrich_result(
+                    result, row=row, url=self.mapping[obj_id], dest=dest,
+                ))
+        return results
+
+
+def download_urls(
+    urls: Union[Mapping[str, str], Sequence[Tuple[str, str]]],
+    dest_dir: Path,
+    *,
+    n_workers: int = 8,
+    checkpoint: Optional[Path] = None,
+    overwrite: bool = False,
+    progress: bool = True,
+    client_kwargs: Optional[dict] = None,
+    dest_fn: Optional[Callable[..., Path]] = None,
+    **download_kwargs,
+) -> RunSummary:
+    """Download a list of URLs -- ``{filename: url}`` or ``[(filename, url)]``.
+
+    The destination file name is the mapping key (relative to ``dest_dir``),
+    so no :class:`SurveyArchive` subclass and no catalog are needed.
+
+    Parameters
+    ----------
+    urls : mapping or sequence of (filename, url)
+        ``filename`` becomes ``dest_dir / filename`` (sub-directories are
+        created as needed).
+    dest_dir : Path
+        Directory that receives the files.
+    overwrite, progress, client_kwargs, dest_fn
+        Forwarded to :class:`DownloadRunner`.
+    **download_kwargs
+        Forwarded to :meth:`HttpClient.download_file` (e.g. ``resume="never"``,
+        ``checksum=("sha256", "...")``, ``progress=...``).
+
+    Examples
+    --------
+    >>> download_urls({"a.fits.gz": "https://example.org/a.fits.gz"}, "./data")
+    """
+    mapping = dict(urls)
+    if not mapping:
+        summary = RunSummary()
+        return summary
+
+    dest_dir = Path(dest_dir)
+    archive = _UrlListArchive(mapping, overwrite=overwrite,
+                              download_kwargs=download_kwargs)
+    catalog = pd.DataFrame({
+        "obj_id": list(mapping),
+        # placeholder coordinates: this archive never uses them
+        "ra": [0.0] * len(mapping),
+        "dec": [0.0] * len(mapping),
+    })
+    runner = DownloadRunner(
+        archive=archive,
+        catalog=catalog,
+        store_dir=dest_dir,
+        checkpoint=checkpoint,
+        n_workers=n_workers,
+        progress=progress,
+        client_kwargs=client_kwargs,
+        dest_fn=dest_fn,
+    )
+    return runner.run()

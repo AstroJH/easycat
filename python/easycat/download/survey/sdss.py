@@ -27,7 +27,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -118,13 +118,18 @@ class SDSSArchive(SurveyArchive):
         image_scale: float = 0.3,
         image_opt: str = "",
         cache_dir: Optional[Path] = None,
+        download_kwargs: Optional[Dict[str, Any]] = None,
     ):
         if mode not in ("spectra", "photometry", "both", "manga", "image"):
             raise ValueError(
                 "mode must be one of spectra/photometry/both/manga/image, "
                 f"got {mode!r}"
             )
-        super().__init__(mode=mode, radius_arcsec=radius_arcsec)
+        super().__init__(
+            download_kwargs=download_kwargs,
+            mode=mode,
+            radius_arcsec=radius_arcsec,
+        )
         self.mode = mode
         self.radius_arcsec = float(radius_arcsec)
 
@@ -182,13 +187,33 @@ class SDSSArchive(SurveyArchive):
     # ------------------------------------------------------------------ #
     # spectra / photometry (SkyServer Cross-ID)
     # ------------------------------------------------------------------ #
-    def output_path(self, ctx: FetchContext, obj_id: str) -> Path:
+    def output_path(self, ctx: FetchContext, obj_id: str, *,
+                    row: Optional[pd.Series] = None) -> Path:
         """Per-source output file, depending on the mode."""
         if self.mode == "manga":
-            return ctx.store_dir / f"{obj_id}.fits.gz"
+            return ctx.dest(
+                obj_id, ctx.store_dir / f"{obj_id}.fits.gz", row=row,
+            )
         if self.mode == "image":
-            return ctx.store_dir / f"{obj_id}.jpg"
-        return ctx.store_dir / f"{obj_id}.fits"      # spectra / photometry
+            return ctx.dest(obj_id, ctx.store_dir / f"{obj_id}.jpg", row=row)
+        return ctx.dest(  # spectra / photometry
+            obj_id, ctx.store_dir / f"{obj_id}.fits", row=row,
+        )
+
+    def prepare_item_row(self, target: Any, row: pd.Series) -> pd.Series:
+        """Allow MaNGA ``plateifu`` identifiers in ``fetch_one``."""
+        if self.mode == "manga" and "plateifu" not in row.index:
+            value = str(target)
+            parts = value.split("-")
+            if len(parts) == 2 and all(p.isdigit() for p in parts):
+                row["plateifu"] = value
+        return row
+
+    def item_metadata(self, row: Optional[pd.Series] = None) -> Dict[str, Any]:
+        meta = super().item_metadata(row)
+        if self.mode == "manga" and self.manga_dap:
+            meta["product"] = f"{self.manga_product}-{self.manga_dap}"
+        return meta
 
     def _fetch_crossid_batch(self, rows: pd.DataFrame,
                              ctx: FetchContext) -> List[ItemResult]:
@@ -235,10 +260,12 @@ class SDSSArchive(SurveyArchive):
             best = matches[0]
 
             try:
-                out = self._store(ctx, obj_id, best)
-                results.append(ItemResult(obj_id=obj_id, success=True, data=out))
+                out = self._store(ctx, obj_id, best, source_row=row)
+                result = ItemResult(obj_id=obj_id, success=True, data=out)
+                results.append(self.enrich_result(result, row=row, dest=out))
             except Exception as exc:
-                results.append(ItemResult(obj_id=obj_id, success=False, error=repr(exc)))
+                result = ItemResult(obj_id=obj_id, success=False, error=repr(exc))
+                results.append(self.enrich_result(result, row=row))
                 
         return results
 
@@ -260,8 +287,11 @@ class SDSSArchive(SurveyArchive):
         order = np.argsort(sep[mask])
         return xid[mask][order]
 
-    def _store(self, ctx: FetchContext, obj_id: str, row) -> Path:
-        out = ctx.store_dir / f"{obj_id}.fits"
+    def _store(self, ctx: FetchContext, obj_id: str, row,
+               *, source_row: Optional[pd.Series] = None) -> Path:
+        out = ctx.dest(
+            obj_id, ctx.store_dir / f"{obj_id}.fits", row=source_row,
+        )
         out.parent.mkdir(parents=True, exist_ok=True)
 
         plate = int(row["plate"])
@@ -298,7 +328,7 @@ class SDSSArchive(SurveyArchive):
         for prefix in candidates:
             url = f"{prefix}/{plate}/{fname}"
             try:
-                ctx.client.download_file(url, dest, overwrite=True)
+                self._download_file(ctx, url, dest)
                 return True
             except Exception:
                 continue
@@ -324,9 +354,13 @@ class SDSSArchive(SurveyArchive):
     # MaNGA IFU data (mode="manga")
     # ------------------------------------------------------------------ #
     def _cache_root(self, ctx: FetchContext) -> Path:
-        root = self.cache_dir or (ctx.store_dir / "_sdss_cache")
-        root.mkdir(parents=True, exist_ok=True)
-        return root
+        """Where the drpall cache lives (path only -- nothing is created).
+
+        The directory is materialised by ``HttpClient.download_file()`` when
+        the index is actually needed, so merely asking for the path (e.g. to
+        report it) leaves no empty directory behind.
+        """
+        return self.cache_dir or (ctx.store_dir / "_sdss_cache")
 
     MANGA_INDEX_COLUMNS = ("plate", "ifudsgn", "plateifu", "objra", "objdec")
 
@@ -396,7 +430,7 @@ class SDSSArchive(SurveyArchive):
                     return int(row[plate_col]), int(row[ifu_col])
                 except (TypeError, ValueError):
                     pass
-        for col in ("plateifu", "PLATEIFU"):
+        for col in ("plateifu", "PLATEIFU", "obj_id"):
             if col in row.index:
                 s = str(row[col])
                 if "-" in s:
@@ -435,18 +469,29 @@ class SDSSArchive(SurveyArchive):
             else:
                 plate, ifu = plate_ifu
             url = self.manga_url(plate, ifu)
-            dest = ctx.store_dir / f"{obj_id}.fits.gz"
+            dest = ctx.dest(
+                obj_id, ctx.store_dir / f"{obj_id}.fits.gz", row=row,
+            )
             try:
-                ctx.client.download_file(url, dest, overwrite=True)
-                results.append(ItemResult(obj_id=obj_id, success=True, data=dest))
+                self._download_file(ctx, url, dest)
+                result = ItemResult(obj_id=obj_id, success=True, data=dest)
+                results.append(
+                    self.enrich_result(result, row=row, url=url, dest=dest)
+                )
             except Exception as exc:
-                status = getattr(getattr(exc, "response", None), "status_code", None)
-                if status == 404:      # target exists, product not available
-                    results.append(ItemResult(obj_id=obj_id, success=True, data=None))
-                else:
-                    results.append(
-                        ItemResult(obj_id=obj_id, success=False, error=repr(exc))
+                status = getattr(exc, "status", None)
+                if status is None:
+                    status = getattr(
+                        getattr(exc, "response", None), "status_code", None,
                     )
+                if status == 404:      # target exists, product not available
+                    result = ItemResult(obj_id=obj_id, success=True, data=None)
+                    results.append(self.enrich_result(result, row=row, url=url))
+                else:
+                    result = ItemResult(
+                        obj_id=obj_id, success=False, error=repr(exc),
+                    )
+                    results.append(self.enrich_result(result, row=row, url=url))
         return results
 
     # ------------------------------------------------------------------ #
@@ -464,13 +509,15 @@ class SDSSArchive(SurveyArchive):
         for _, row in rows.iterrows():
             obj_id = ctx.row_id(row)
             ra, dec = ctx.row_coord(row)
-            dest = ctx.store_dir / f"{obj_id}.jpg"
+            dest = ctx.dest(obj_id, ctx.store_dir / f"{obj_id}.jpg", row=row)
             try:
-                ctx.client.download_file(self.image_url(ra, dec), dest,
-                                         overwrite=True)
-                results.append(ItemResult(obj_id=obj_id, success=True, data=dest))
-            except Exception as exc:
+                url = self.image_url(ra, dec)
+                self._download_file(ctx, url, dest)
+                result = ItemResult(obj_id=obj_id, success=True, data=dest)
                 results.append(
-                    ItemResult(obj_id=obj_id, success=False, error=repr(exc))
+                    self.enrich_result(result, row=row, url=url, dest=dest)
                 )
+            except Exception as exc:
+                result = ItemResult(obj_id=obj_id, success=False, error=repr(exc))
+                results.append(self.enrich_result(result, row=row))
         return results

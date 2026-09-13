@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import io
 import logging
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import pandas as pd
-
+from pathlib import Path
 from ..base import FetchContext, ItemResult, SurveyArchive
 
 logger = logging.getLogger("easycat.download")
@@ -49,8 +49,10 @@ class ZTFArchive(SurveyArchive):
         radius_arcsec: float = 3.0,
         store_format: str = "csv",
         max_objects: Optional[int] = None,
+        download_kwargs: Optional[Dict] = None,
     ):
         super().__init__(
+            download_kwargs=download_kwargs,
             bands=bands,
             radius_arcsec=radius_arcsec,
             store_format=store_format,
@@ -70,9 +72,12 @@ class ZTFArchive(SurveyArchive):
             results.append(self._fetch_one(row, ctx))
         return results
 
-    def output_path(self, ctx: FetchContext, obj_id: str) -> Path:
+    def output_path(self, ctx: FetchContext, obj_id: str, *,
+                    row: Optional[pd.Series] = None) -> Path:
         """Per-source light curve (CSV or FITS, per ``store_format``)."""
-        return ctx.store_dir / f"{obj_id}.{self.store_format}"
+        return ctx.dest(
+            obj_id, ctx.store_dir / f"{obj_id}.{self.store_format}", row=row,
+        )
 
     def _fetch_one(self, row: pd.Series, ctx: FetchContext) -> ItemResult:
         obj_id = ctx.row_id(row)
@@ -89,11 +94,13 @@ class ZTFArchive(SurveyArchive):
             resp.raise_for_status()
             df = pd.read_csv(io.StringIO(resp.text))
         except Exception as exc:
-            return ItemResult(obj_id=obj_id, success=False, error=repr(exc))
+            result = ItemResult(obj_id=obj_id, success=False, error=repr(exc))
+            return self.enrich_result(result, row=row, url=url)
 
         if df is None or len(df) == 0:
             # Query succeeded but no ZTF light curve within the cone.
-            return ItemResult(obj_id=obj_id, success=True, data=None)
+            result = ItemResult(obj_id=obj_id, success=True, data=None)
+            return self.enrich_result(result, row=row, url=url)
 
         if self.max_objects is not None:
             # Keep the closest objects (light curves are ordered by the
@@ -101,7 +108,9 @@ class ZTFArchive(SurveyArchive):
             df = df.head(self.max_objects)
 
         try:
-            out_path = ctx.store_dir / f"{obj_id}.{self.store_format}"
+            out_path = ctx.dest(
+                obj_id, ctx.store_dir / f"{obj_id}.{self.store_format}", row=row,
+            )
             out_path.parent.mkdir(parents=True, exist_ok=True)
             if self.store_format == "csv":
                 df.to_csv(out_path, index=False)
@@ -112,6 +121,8 @@ class ZTFArchive(SurveyArchive):
             else:
                 raise ValueError(f"Unknown store_format: {self.store_format}")
         except Exception as exc:
-            return ItemResult(obj_id=obj_id, success=False, error=repr(exc))
+            result = ItemResult(obj_id=obj_id, success=False, error=repr(exc))
+            return self.enrich_result(result, row=row, url=url)
 
-        return ItemResult(obj_id=obj_id, success=True, data=df)
+        result = ItemResult(obj_id=obj_id, success=True, data=df)
+        return self.enrich_result(result, row=row, url=url, dest=out_path)

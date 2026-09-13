@@ -22,7 +22,7 @@ from __future__ import annotations
 import io
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Literal
+from typing import Any, Dict, List, Optional, Tuple, Literal
 from numpy.typing import NDArray
 
 import numpy as np
@@ -152,6 +152,7 @@ class DESIArchive(SurveyArchive):
         image_format: Literal["fits", "jpg"] = "fits",
         image_size: int = 256,
         image_pixscale: float = 0.262,
+        download_kwargs: Optional[Dict[str, Any]] = None,
     ):
         if mode not in ("photometry", "spectra", "image"):
             raise ValueError(
@@ -161,6 +162,7 @@ class DESIArchive(SurveyArchive):
             raise ValueError(f"image_format must be 'fits' or 'jpg', got {image_format!r}")
         
         super().__init__(
+            download_kwargs=download_kwargs,
             mode=mode,
             radius_arcsec=radius_arcsec,
             ls_release=ls_release,
@@ -199,12 +201,15 @@ class DESIArchive(SurveyArchive):
     # ------------------------------------------------------------------ #
     # photometry
     # ------------------------------------------------------------------ #
-    def output_path(self, ctx: FetchContext, obj_id: str) -> Path:
+    def output_path(self, ctx: FetchContext, obj_id: str, *,
+                    row: Optional[pd.Series] = None) -> Path:
         """Per-source output file, depending on the mode."""
         if self.mode == "image":
             ext = "fits" if self.image_format == "fits" else "jpg"
-            return ctx.store_dir / f"{obj_id}.{ext}"
-        return ctx.store_dir / f"{obj_id}.fits"       # photometry / spectra
+            return ctx.dest(obj_id, ctx.store_dir / f"{obj_id}.{ext}", row=row)
+        return ctx.dest(  # photometry / spectra
+            obj_id, ctx.store_dir / f"{obj_id}.fits", row=row,
+        )
 
     def _fetch_photometry_batch(
         self, rows: pd.DataFrame, ctx: FetchContext
@@ -251,10 +256,16 @@ class DESIArchive(SurveyArchive):
                         results[i] = ItemResult(obj_id=obj_id, success=True, data=None)
                         continue
                     try:
-                        out = self._write_photometry(ctx, obj_id, tractor[j], brickname)
-                        results[i] = ItemResult(obj_id=obj_id, success=True, data=out)
+                        out = self._write_photometry(
+                            ctx, obj_id, tractor[j], brickname, source_row=row,
+                        )
+                        result = ItemResult(obj_id=obj_id, success=True, data=out)
+                        results[i] = self.enrich_result(result, row=row, dest=out)
                     except Exception as exc:
-                        results[i] = ItemResult(obj_id=obj_id, success=False, error=repr(exc))
+                        result = ItemResult(
+                            obj_id=obj_id, success=False, error=repr(exc),
+                        )
+                        results[i] = self.enrich_result(result, row=row)
             except Exception as exc:
                 for i in idxs:
                     obj_id = ctx.row_id(rows.iloc[i])
@@ -269,8 +280,11 @@ class DESIArchive(SurveyArchive):
                 )
         return results
 
-    def _write_photometry(self, ctx, obj_id, row, brickname) -> Path:
-        out = ctx.store_dir / f"{obj_id}.fits"
+    def _write_photometry(self, ctx, obj_id, row, brickname, *,
+                          source_row: Optional[pd.Series] = None) -> Path:
+        out = ctx.dest(
+            obj_id, ctx.store_dir / f"{obj_id}.fits", row=source_row,
+        )
         out.parent.mkdir(parents=True, exist_ok=True)
         cols = [c for c in PHOTOMETRY_COLUMNS if c in row.colnames]
         rename = {c: PHOTOMETRY_COLUMNS[c] for c in cols}
@@ -412,14 +426,20 @@ class DESIArchive(SurveyArchive):
                             try:
                                 out = self._extract_spectrum(
                                     ctx, cache, hdul, survey, program, hp,
-                                    obj_id, int(tids[j]), j, ra, dec,
+                                    obj_id, int(tids[j]), j, ra, dec, row,
                                 )
-                                results[i] = ItemResult(
+                                result = ItemResult(
                                     obj_id=obj_id, success=True, data=out
                                 )
+                                results[i] = self.enrich_result(
+                                    result, row=row, url=url, dest=out,
+                                )
                             except Exception as exc:
-                                results[i] = ItemResult(
+                                result = ItemResult(
                                     obj_id=obj_id, success=False, error=repr(exc)
+                                )
+                                results[i] = self.enrich_result(
+                                    result, row=row, url=url,
                                 )
                 return  # first (survey, program) with a match wins
             except Exception as exc:
@@ -428,7 +448,7 @@ class DESIArchive(SurveyArchive):
 
     def _extract_spectrum(
         self, ctx, cache, hdul, survey, program, hp,
-        obj_id, targetid, row, ra, dec,
+        obj_id, targetid, row, ra, dec, source_row=None,
     ) -> Path:
         arms = {}
         for arm in "BRZ":
@@ -440,7 +460,9 @@ class DESIArchive(SurveyArchive):
 
         z, spectype = self._redrock_z(ctx, cache, survey, program, hp, targetid)
 
-        out = ctx.store_dir / f"{obj_id}.fits"
+        out = ctx.dest(
+            obj_id, ctx.store_dir / f"{obj_id}.fits", row=source_row,
+        )
         out.parent.mkdir(parents=True, exist_ok=True)
 
         primary = fits.PrimaryHDU()
@@ -512,15 +534,17 @@ class DESIArchive(SurveyArchive):
         for _, row in rows.iterrows():
             obj_id = ctx.row_id(row)
             ra, dec = ctx.row_coord(row)
-            dest = ctx.store_dir / f"{obj_id}.{ext}"
+            dest = ctx.dest(obj_id, ctx.store_dir / f"{obj_id}.{ext}", row=row)
             try:
-                ctx.client.download_file(self.image_url(ra, dec), dest,
-                                         overwrite=True)
-                results.append(ItemResult(obj_id=obj_id, success=True, data=dest))
-            except Exception as exc:
+                url = self.image_url(ra, dec)
+                self._download_file(ctx, url, dest)
+                result = ItemResult(obj_id=obj_id, success=True, data=dest)
                 results.append(
-                    ItemResult(obj_id=obj_id, success=False, error=repr(exc))
+                    self.enrich_result(result, row=row, url=url, dest=dest)
                 )
+            except Exception as exc:
+                result = ItemResult(obj_id=obj_id, success=False, error=repr(exc))
+                results.append(self.enrich_result(result, row=row))
         return results
 
     # ------------------------------------------------------------------ #

@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 from astropy.io import ascii
 from astropy.table import MaskedColumn, Table, vstack
+from pathlib import Path
 
 from ..base import FetchContext, ItemResult, SurveyArchive
 
@@ -27,6 +28,7 @@ GATOR_URL = "https://irsa.ipac.caltech.edu/cgi-bin/Gator/nph-query"
 
 NEOWISE_CATALOG = "neowiser_p1bs_psd"
 ALLWISE_CATALOG = "allwise_p3as_mep"
+ALLSKY_SOURCE_CATALOG = "allsky_4band_p3as_psd"
 
 # Columns requested from each catalog (must match combine_wisedata()).
 NEOWISE_SELCOLS = (
@@ -37,6 +39,21 @@ ALLWISE_SELCOLS = (
     "ra,dec,mjd,w1mpro_ep,w1sigmpro_ep,w1rchi2_ep,w2mpro_ep,"
     "w2sigmpro_ep,w2rchi2_ep,na,nb,qi_fact,cc_flags,saa_sep,moon_masked"
 )
+
+# Curated WISE All-Sky Source Catalog columns.  The three quality flags
+# requested by consumers (cc_flags/ext_flg/var_flg) are intentionally
+# included in the core selection.
+ALLSKY_SELCOLS = (
+    "designation,ra,dec,sigra,sigdec,cntr,source_id,"
+    "w1mpro,w1sigmpro,w1rchi2,w2mpro,w2sigmpro,w2rchi2,"
+    "w3mpro,w3sigmpro,w3rchi2,w4mpro,w4sigmpro,w4rchi2,"
+    "w1mag,w2mag,w3mag,w4mag,"
+    "w1flux,w1sigflux,w2flux,w2sigflux,w3flux,w3sigflux,w4flux,w4sigflux,"
+    "w1snr,w2snr,w3snr,w4snr,w1sat,w2sat,w3sat,w4sat,"
+    "cc_flags,ext_flg,var_flg,ph_qual,det_bit"
+)
+
+WISE_MODES = ("multiepoch", "allsky")
 
 # Fields of the final per-source light-curve table.
 LC_FIELDS = [
@@ -160,10 +177,16 @@ def _rows_retrieved(text: str) -> int:
 
 
 class WISEArchive(SurveyArchive):
-    """Batch WISE/NEOWISE light-curve downloader.
+    """Batch WISE/NEOWISE and WISE All-Sky downloader.
 
     Parameters
     ----------
+    mode : {"multiepoch", "allsky"}
+        ``"multiepoch"`` queries NEOWISE + AllWISE multiepoch photometry
+        and combines them into light curves.  ``"allsky"`` queries the
+        WISE All-Sky Source Catalog (``allsky_4band_p3as_psd``) and returns
+        one row per matched WISE source, including ``cc_flags``, ``ext_flg``
+        and ``var_flg``.
     radius_arcsec : float
         Cone-search radius in arcseconds (per source).
     store_format : str
@@ -171,28 +194,43 @@ class WISEArchive(SurveyArchive):
     """
 
     name = "wise"
-    default_batch_size = 200
+    default_batch_size = 50
 
-    def __init__(self, *, radius_arcsec: float = 3.0, store_format: str = "fits"):
+    def __init__(
+        self,
+        *,
+        mode: str = "multiepoch",
+        radius_arcsec: float = 3.0,
+        store_format: str = "fits",
+        download_kwargs: Optional[Dict] = None,
+    ):
+        if mode not in WISE_MODES:
+            raise ValueError(f"mode must be one of {WISE_MODES}, got {mode!r}")
         super().__init__(
+            download_kwargs=download_kwargs,
+            mode=mode,
             radius_arcsec=radius_arcsec,
             store_format=store_format,
         )
+        self.mode = mode
         self.radius_arcsec = float(radius_arcsec)
         self.store_format = store_format
 
     # ---------------------------------------- #
     # SurveyArchive
     # ---------------------------------------- #
-    def output_path(self, ctx: FetchContext, obj_id: str) -> Path:
+    def output_path(self, ctx: FetchContext, obj_id: str, *,
+                    row: Optional[pd.Series] = None) -> Path:
         """Per-source light curve (written when WISE data exist)."""
-        return ctx.store_dir / f"{obj_id}.fits"
+        return ctx.dest(obj_id, ctx.store_dir / f"{obj_id}.fits", row=row)
 
     def fetch_batch(self, rows: pd.DataFrame, ctx: FetchContext) -> List[ItemResult]:
         if len(rows) == 0:
             return []
 
         table_text = _build_ipac_table(rows, ctx.ra_column, ctx.dec_column)
+        if self.mode == "allsky":
+            return self._fetch_allsky_batch(rows, ctx, table_text)
 
         t_neowise = self._query_catalog(
             ctx, NEOWISE_CATALOG, NEOWISE_SELCOLS, table_text,
@@ -215,26 +253,77 @@ class WISEArchive(SurveyArchive):
                 t_all = allwise_by_row.get(idx)
                 if t_neo is None and t_all is None:
                     # Query succeeded but the source has no WISE detections.
-                    results.append(ItemResult(obj_id=obj_id, success=True, data=None))
+                    result = ItemResult(obj_id=obj_id, success=True, data=None)
+                    results.append(self.enrich_result(result, row=row, url=GATOR_URL))
                     continue
 
                 combined = combine_wisedata(t_neo, t_all)
                 if len(combined) == 0:
-                    results.append(ItemResult(obj_id=obj_id, success=True, data=None))
+                    result = ItemResult(obj_id=obj_id, success=True, data=None)
+                    results.append(self.enrich_result(result, row=row, url=GATOR_URL))
                     continue
 
-                out_path = ctx.store_dir / f"{obj_id}.fits"
+                out_path = ctx.dest(
+                    obj_id, ctx.store_dir / f"{obj_id}.fits", row=row,
+                )
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 combined.meta = {}  # drop parser bookkeeping (e.g. `keywords`)
                 combined.write(out_path, overwrite=True)
+                result = ItemResult(obj_id=obj_id, success=True, data=combined)
                 results.append(
-                    ItemResult(obj_id=obj_id, success=True, data=combined)
+                    self.enrich_result(
+                        result, row=row, url=GATOR_URL, dest=out_path,
+                    )
                 )
             except Exception as exc:
                 logger.warning("WISE %s: %s", obj_id, exc)
-                results.append(
-                    ItemResult(obj_id=obj_id, success=False, error=repr(exc))
+                result = ItemResult(obj_id=obj_id, success=False, error=repr(exc))
+                results.append(self.enrich_result(result, row=row, url=GATOR_URL))
+        return results
+
+    def _fetch_allsky_batch(
+        self,
+        rows: pd.DataFrame,
+        ctx: FetchContext,
+        table_text: str,
+    ) -> List[ItemResult]:
+        """Search the WISE All-Sky Source Catalog per input row."""
+        table = self._query_catalog(
+            ctx, ALLSKY_SOURCE_CATALOG, ALLSKY_SELCOLS, table_text,
+            required=True,
+        )
+        by_row = self._slice_by_row(table, keep=("dist_x",))
+
+        results: List[ItemResult] = []
+        for idx, (_, row) in enumerate(rows.iterrows(), start=1):
+            obj_id = ctx.row_id(row)
+            try:
+                match = by_row.get(idx)
+                if match is None or len(match) == 0:
+                    result = ItemResult(obj_id=obj_id, success=True, data=None)
+                    results.append(self.enrich_result(result, row=row, url=GATOR_URL))
+                    continue
+
+                match = match.copy()
+                if "dist_x" in match.colnames:
+                    match.rename_column("dist_x", "sep_arcsec")
+                    match.sort("sep_arcsec")
+                out_path = ctx.dest(
+                    obj_id, ctx.store_dir / f"{obj_id}.fits", row=row,
                 )
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                match.meta = {}
+                match.write(out_path, overwrite=True)
+                result = ItemResult(obj_id=obj_id, success=True, data=match)
+                results.append(
+                    self.enrich_result(
+                        result, row=row, url=GATOR_URL, dest=out_path,
+                    )
+                )
+            except Exception as exc:
+                logger.warning("WISE All-Sky %s: %s", obj_id, exc)
+                result = ItemResult(obj_id=obj_id, success=False, error=repr(exc))
+                results.append(self.enrich_result(result, row=row, url=GATOR_URL))
         return results
 
     def _query_catalog(
@@ -278,12 +367,14 @@ class WISEArchive(SurveyArchive):
         except Exception as exc:
             if required:
                 raise
-            logger.warning("AllWISE query failed (continuing with NEOWISE only): %s", exc)
+            logger.warning("%s query failed: %s", catalog, exc)
             return None
 
     @staticmethod
     def _slice_by_row(
         tbl: Optional[Table],
+        *,
+        keep: tuple = (),
     ) -> Dict[int, Optional[Table]]:
         """Split a batch result table into per-input-row tables."""
         if tbl is None:
@@ -294,7 +385,7 @@ class WISEArchive(SurveyArchive):
             idx = int(cntr)
             sub = tbl[tbl["cntr_01"] == cntr]
             for col in bookkeeping:
-                if col in sub.colnames:
+                if col in sub.colnames and col not in keep:
                     sub.remove_column(col)
             out[idx] = sub
         return out

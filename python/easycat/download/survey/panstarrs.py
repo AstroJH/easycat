@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import io
 import logging
-from typing import List
+from typing import Dict, List, Optional
 
 import pandas as pd
+from pathlib import Path
 
 from ..base import FetchContext, ItemResult, SurveyArchive
 
@@ -49,10 +50,12 @@ class PanSTARRSArchive(SurveyArchive):
         release: str = "dr2",
         table: str = "detection",
         store_format: str = "csv",
+        download_kwargs: Optional[Dict] = None,
     ):
         if band not in FILTER_ID_MAP:
             raise ValueError(f"unknown band: {band!r}")
         super().__init__(
+            download_kwargs=download_kwargs,
             band=band, radius_arcsec=radius_arcsec, release=release,
             table=table, store_format=store_format,
         )
@@ -68,9 +71,12 @@ class PanSTARRSArchive(SurveyArchive):
             results.append(self._fetch_one(row, ctx))
         return results
 
-    def output_path(self, ctx: FetchContext, obj_id: str) -> Path:
+    def output_path(self, ctx: FetchContext, obj_id: str, *,
+                    row: Optional[pd.Series] = None) -> Path:
         """Per-source photometry file (CSV or FITS, per ``store_format``)."""
-        return ctx.store_dir / f"{obj_id}.{self.store_format}"
+        return ctx.dest(
+            obj_id, ctx.store_dir / f"{obj_id}.{self.store_format}", row=row,
+        )
 
     def _fetch_one(self, row: pd.Series, ctx: FetchContext) -> ItemResult:
         obj_id = ctx.row_id(row)
@@ -90,13 +96,17 @@ class PanSTARRSArchive(SurveyArchive):
             resp.raise_for_status()
             df = pd.read_csv(io.StringIO(resp.text))
         except Exception as exc:
-            return ItemResult(obj_id=obj_id, success=False, error=repr(exc))
+            result = ItemResult(obj_id=obj_id, success=False, error=repr(exc))
+            return self.enrich_result(result, row=row, url=url)
 
         if df is None or len(df) == 0:
-            return ItemResult(obj_id=obj_id, success=True, data=None)
+            result = ItemResult(obj_id=obj_id, success=True, data=None)
+            return self.enrich_result(result, row=row, url=url)
 
         try:
-            out_path = ctx.store_dir / f"{obj_id}.{self.store_format}"
+            out_path = ctx.dest(
+                obj_id, ctx.store_dir / f"{obj_id}.{self.store_format}", row=row,
+            )
             out_path.parent.mkdir(parents=True, exist_ok=True)
             if self.store_format == "csv":
                 df.to_csv(out_path, index=False)
@@ -107,5 +117,7 @@ class PanSTARRSArchive(SurveyArchive):
             else:
                 raise ValueError(f"Unknown store_format: {self.store_format}")
         except Exception as exc:
-            return ItemResult(obj_id=obj_id, success=False, error=repr(exc))
-        return ItemResult(obj_id=obj_id, success=True, data=df)
+            result = ItemResult(obj_id=obj_id, success=False, error=repr(exc))
+            return self.enrich_result(result, row=row, url=url)
+        result = ItemResult(obj_id=obj_id, success=True, data=df)
+        return self.enrich_result(result, row=row, url=url, dest=out_path)
